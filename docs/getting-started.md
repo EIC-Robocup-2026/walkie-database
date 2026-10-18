@@ -40,17 +40,50 @@ pixi install
 pixi run test
 ```
 
-The tests use throwaway databases and need no robot. All tests should pass.
+The tests use throwaway databases and need no robot. They run on Fast DDS,
+so they need no Zenoh router either. All tests should pass.
 
 ## 4. Run the database node
 
-```bash
+Every `pixi run` uses the Zenoh middleware, like walkie-ros and the robot
+([ADR-0014](architecture/decisions/0014-zenoh-default-middleware.md)). Under
+Zenoh, nodes find each other only through a **Zenoh router**, one per
+computer. On the robot, or next to walkie-ros's simulation, a router is
+already running: use it. Otherwise, start one in its own terminal:
+
+```bash title="Terminal 1: Zenoh router"
+pixi run ros2 run rmw_zenoh_cpp rmw_zenohd
+```
+
+```bash title="Terminal 2: the database node"
 pixi run db-node
 ```
 
 The node creates `data/walkie.db` if it does not exist, and brings its
 schema up to date. Press ++ctrl+c++ to stop it. Git ignores `data/`, so the
 database is never committed.
+
+Check that other nodes can see it:
+
+```bash title="Terminal 3"
+pixi run ros2 node list   # should show /walkie_database
+```
+
+!!! warning "Without a router, the node runs alone"
+    The node still starts and logs `Unable to connect to a Zenoh router`,
+    but no other node can see it. Start a router, and the node is found
+    within a few seconds, without a restart.
+
+!!! tip "Use the same domain in every terminal"
+    Nodes on different `ROS_DOMAIN_ID`s never see each other. Use the
+    domain of the nodes you want to reach: `export ROS_DOMAIN_ID=23` on the
+    robot. For walkie-ros's simulation, use the domain it was started with:
+    `42` if you followed walkie-agent-ros's Getting Started, or `0` if
+    `ROS_DOMAIN_ID` was not set.
+
+[Use the Zenoh middleware](setup/07-zenoh.md) explains the router, the
+warnings Zenoh prints at start-up, and how to run one command on another
+middleware.
 
 To use another file, set the `db_path` parameter:
 

@@ -60,3 +60,8 @@ before ROS starts, the same way walkie-agent-ros does:
 ```bash
 pixi run test
 ```
+
+Since [step 7](07-zenoh.md), `pixi.toml` puts every other `pixi run` on
+Zenoh. The tests still run on Fast DDS, because `conftest.py` sets the
+variable inside the test process, after Pixi has set it and before anything
+imports rclpy.

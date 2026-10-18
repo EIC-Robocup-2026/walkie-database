@@ -26,6 +26,10 @@ them by meaning, by position and by words.
 - **Sessions forget guests.** People met in a session, their appearance and
   their conversations are deleted with the session. Objects and rooms stay
   ([ADR-0010](decisions/0010-session-owns-people-and-conversations.md)).
+- **Zenoh, like the robot.** Every `pixi run` uses `rmw_zenoh_cpp`, as
+  walkie-ros does, so nodes find each other through a Zenoh router. The
+  tests stay on Fast DDS
+  ([ADR-0014](decisions/0014-zenoh-default-middleware.md)).
 
 ## The parts
 
@@ -293,3 +297,7 @@ Vector queries are easier from Python.
 
 The object memory decisions, ADR-0011 to ADR-0013, are on the
 [Object Memory](object-memory.md#decisions) page.
+
+??? success "ADR-0014: Use Zenoh as the default ROS 2 middleware · Accepted"
+
+    --8<-- "architecture/decisions/0014-zenoh-default-middleware.md:body"

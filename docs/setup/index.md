@@ -12,3 +12,4 @@ steps in your own project, or when you add a new kind of memory.
 | [4. Write the schema and migrations](04-schema-and-migrations.md)   | Creates the tables, and a way to change them later                |
 | [5. Run it as a ROS 2 node](05-ros-node.md)                         | Wraps the database in the node that owns it                       |
 | [6. Add sample data and a browser](06-sample-data-and-browser.md)   | Fills a demo file, and shows any database in a web browser        |
+| [7. Use the Zenoh middleware](07-zenoh.md)                          | Puts every `pixi run` on Zenoh, like walkie-ros and the robot     |

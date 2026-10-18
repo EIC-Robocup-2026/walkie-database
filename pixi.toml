@@ -9,6 +9,14 @@ version = "0.1.0"
 # RoboStack Jazzy builds for Python 3.12.
 python = "3.12.*"
 ros-jazzy-ros-base = ">=0.11.0,<0.12"
+# The ROS 2 middleware, because walkie-ros and the robot run on Zenoh
+# (ADR-0014). 0.2.10's rmw_wait can block forever (ros2/rmw_zenoh#1032);
+# 0.2.11 fixes it (ros2/rmw_zenoh#1040). RoboStack's 0.2.11 build
+# (hb0f4dca_25) comes from the same stack build as ros-base above (_25), so no
+# source build is needed. walkie-agent-ros builds 0.2.11 from source instead,
+# because rai-core rejects the OpenCV 5 that RoboStack's 0.2.11 stack needs
+# (its ADR-0032). This package also provides the router, rmw_zenohd.
+ros-jazzy-rmw-zenoh-cpp = ">=0.2.11,<0.3"
 # The sqlite-vec extension (vec0 vector tables) and its Python loader.
 # sqlite-vec is not 1.0 yet, so minor releases may change its SQL; move the
 # upper bound on purpose, after the tests pass (ADR-0007).
@@ -21,6 +29,16 @@ pytest = ">=9.1.1,<10"
 
 [pypi-dependencies]
 walkie-database = { path = ".", editable = true }
+
+# Every `pixi run` and `pixi shell` uses Zenoh, as walkie-ros and the robot do,
+# even when the calling shell exports another middleware (ADR-0014). Nodes then
+# find each other only through a Zenoh router, at rmw_zenoh's default
+# tcp/localhost:7447. To use another middleware, set RMW_IMPLEMENTATION in a
+# task's `env`, or run `pixi run env RMW_IMPLEMENTATION=rmw_fastrtps_cpp <cmd>`.
+# The docs and browse environments leave out the default feature, and with it
+# this table, so their own features below set the same value.
+[activation.env]
+RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
 
 [tasks.test]
 cmd = "pytest"
@@ -44,6 +62,11 @@ docs-build = "mkdocs build --strict"
 mkdocs-material = ">=9.7,<10"
 mkdocs = ">=1.6,<2"
 
+# The docs environment has no ROS, but sets the same middleware as
+# [activation.env] above, so that every environment agrees (ADR-0014).
+[feature.docs.activation.env]
+RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
+
 # Datasette, a read-only web viewer, in its own environment so that its web
 # server dependencies stay out of the robot's environment.
 [feature.browse.dependencies]
@@ -52,6 +75,11 @@ python = "3.12.*"
 datasette = ">=0.65.5,<0.66"
 # Only the loadable vec0 library: Datasette loads it with --load-extension.
 libsqlite-vec = ">=0.1.9,<0.2"
+
+# No ROS here either. The same middleware as every other environment
+# (ADR-0014).
+[feature.browse.activation.env]
+RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
 
 # Opens every file in data/ as its own database. The plugin hides the internal
 # tables behind vector, R*Tree, Geopoly and full-text tables.

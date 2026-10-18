@@ -3,15 +3,18 @@ import random
 
 import pytest
 
-from walkie_database.db import connect
-from walkie_database.migrate import migrate
-
+# Tests run on Fast DDS, although pixi.toml sets rmw_zenoh_cpp for every
+# `pixi run` (ADR-0014): under rmw_zenoh, nodes find each other only through a
+# router, and CI has none. This must run before anything imports rclpy:
+# importing it loads rcl, which reads RMW_IMPLEMENTATION and loads that
+# middleware, so a change after the import has no effect. Keep every import
+# that may pull in rclpy below these lines.
+os.environ["RMW_IMPLEMENTATION"] = "rmw_fastrtps_cpp"
 # Keep test traffic on this machine and off any domain a real robot might use.
 os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
-# Tests run on Fast DDS even from a shell set up for the robot or the
-# simulator: under rmw_zenoh, nodes find each other only through a router.
-# Set before rclpy.init, which is when the middleware is loaded.
-os.environ["RMW_IMPLEMENTATION"] = "rmw_fastrtps_cpp"
+
+from walkie_database.db import connect  # noqa: E402
+from walkie_database.migrate import migrate  # noqa: E402
 
 
 @pytest.fixture

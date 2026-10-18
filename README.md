@@ -31,6 +31,15 @@ Run the node. It creates `data/walkie.db` and brings its schema up to date:
 pixi run db-node
 ```
 
+Every `pixi run` uses the Zenoh middleware, like walkie-ros and the robot.
+Other nodes see this one only through a Zenoh router on the same computer.
+The robot and walkie-ros's simulation already run one. Elsewhere, start it
+first, in its own terminal:
+
+```bash
+pixi run ros2 run rmw_zenoh_cpp rmw_zenohd
+```
+
 Look inside the file, read-only, while the node runs:
 
 ```bash
