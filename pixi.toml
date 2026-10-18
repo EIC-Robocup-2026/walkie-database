@@ -1,0 +1,48 @@
+[workspace]
+authors = ["natapol2547 <robloxplay41@gmail.com>"]
+channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
+name = "walkie-database"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[dependencies]
+# RoboStack Jazzy builds for Python 3.12.
+python = "3.12.*"
+ros-jazzy-ros-base = ">=0.11.0,<0.12"
+# The sqlite-vec extension (vec0 vector tables) and its Python loader.
+# sqlite-vec is not 1.0 yet, so minor releases may change its SQL; move the
+# upper bound on purpose, after the tests pass (ADR-0007).
+sqlite-vec-python = ">=0.1.9,<0.2"
+# The sqlite3 command-line shell, used by `pixi run db-shell`. The library
+# itself (libsqlite) comes with Python.
+sqlite = ">=3.54.1,<4"
+numpy = ">=2.5.4,<3"
+pytest = ">=9.1.1,<10"
+
+[pypi-dependencies]
+walkie-database = { path = ".", editable = true }
+
+[tasks.test]
+cmd = "pytest"
+description = "Run the test suite"
+
+[tasks.db-node]
+cmd = "python -m walkie_database.node"
+description = "Run the database node (opens data/walkie.db and updates its schema)"
+
+# -readonly so a look around cannot change the file while the node runs.
+# The .load line adds sqlite-vec, without which vec0 tables cannot be read.
+[tasks.db-shell]
+cmd = 'sqlite3 -readonly -cmd ".load $CONDA_PREFIX/lib/sqlite-vec/vec0" -cmd ".mode box" data/walkie.db'
+description = "Open data/walkie.db read-only in the sqlite3 shell, with sqlite-vec loaded"
+
+[feature.docs.tasks]
+docs = "mkdocs serve"
+docs-build = "mkdocs build --strict"
+
+[feature.docs.dependencies]
+mkdocs-material = ">=9.7,<10"
+mkdocs = ">=1.6,<2"
+
+[environments]
+docs = { features = ["docs"], no-default-feature = true }

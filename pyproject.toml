@@ -1,0 +1,22 @@
+[project]
+name = "walkie-database"
+version = "0.1.0"
+description = "Walkie's long-term memory: chat, people, objects and rooms in one SQLite file (EIC RoboCup 2026)"
+requires-python = ">=3.12,<3.13"
+# Runtime dependencies (ROS 2, sqlite-vec, NumPy) are declared in pixi.toml.
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+walkie_database = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# ROS 2 ships pytest plugins (launch_testing, etc.) that are not needed here.
+addopts = "-p no:launch_testing -p no:launch_ros -p no:ament_copyright -p no:ament_flake8 -p no:ament_pep257 -p no:ament_xmllint -p no:ament_lint"

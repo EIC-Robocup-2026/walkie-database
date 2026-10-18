@@ -1,0 +1,11 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+# The database itself and its WAL files (see docs/getting-started.md)
+data/
+# MkDocs build output
+site/
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
