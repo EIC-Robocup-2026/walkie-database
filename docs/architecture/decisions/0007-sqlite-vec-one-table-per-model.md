@@ -32,6 +32,9 @@ different things.
 - A search takes about 7 ms for 10,000 vectors and 75 ms for 100,000 on a
   laptop. Walkie's memory stays far below that, but a table that grows past
   about 100,000 rows needs a different index.
+- Each vector table reserves room for 1,024 vectors on its first row, about
+  2 MB for 512 numbers each. Every model therefore adds about 2 MB to the
+  file, even with only a few rows.
 - Metadata columns cannot hold `NULL`, so `0` means "none", and a trigger
   keeps them in step with their table.
 - A failed write to a `vec0` table can leave half a row behind, so every

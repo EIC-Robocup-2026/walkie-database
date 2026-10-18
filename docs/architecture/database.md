@@ -84,7 +84,7 @@ erDiagram
 | `map`                | A map the robot built, for example `arena-2026-10-19`                     | `frame_id` is the TF frame its coordinates are in, usually `map`                 |
 | `session`            | One run of a task, for example one Receptionist attempt                   |                                                                                 |
 | `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room                       |
-| `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion                                 |
+| `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand) |
 | `object_cloud`       | The merged point cloud of one object                                      | Its own table, so reading `object` never loads the points                      |
 | `object_observation` | One detection of an object                                                | No points ([ADR-0011](decisions/0011-merge-clouds-in-memory.md))                 |
 | `person`             | One person. `session_id` is NULL for people kept across sessions          | `attributes` is JSON, for example `{"drink": "coke"}`                           |
@@ -113,6 +113,10 @@ All vector tables use cosine distance: 0 means the same direction, 1 means
 unrelated, 2 means opposite. sqlite-vec compares the query with every
 vector, with no approximate index. On a laptop, that takes about 7 ms for
 10,000 vectors of 512 numbers, and about 75 ms for 100,000.
+
+A vector table takes no space until its first row. Then it reserves room
+for 1,024 vectors at once: about 2 MB for 512 numbers each. A file with a
+few rows in each vector table is therefore already about 8 MB.
 
 ## Example queries
 
@@ -230,6 +234,7 @@ Vector queries are easier from Python.
 | What                              | Where                                       | In Git |
 | --------------------------------- | ------------------------------------------- | ------ |
 | The memory                        | `data/walkie.db`, plus `-wal` and `-shm` files next to it while the node runs | No |
+| Sample data, for learning and demos | `data/demo.db`, written by `pixi run db-seed` ([setup step 6](../setup/06-sample-data-and-browser.md)) | No |
 | Images of detections and faces    | Files on disk. The database keeps their path in `crop_path` | No |
 | Raw detections, for re-tuning     | A `ros2 bag` of the detection topic ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)) | No |
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |

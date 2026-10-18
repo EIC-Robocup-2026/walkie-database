@@ -37,12 +37,22 @@ Look inside the file, read-only, while the node runs:
 pixi run db-shell
 ```
 
+Or fill a separate file with a sample house, and browse it in a web browser
+at <http://127.0.0.1:8001>:
+
+```bash
+pixi run db-seed
+pixi run db-browse
+```
+
 ## Tasks
 
 | Command               | What it does                                                        |
 | --------------------- | ------------------------------------------------------------------- |
 | `pixi run db-node`    | Run the database node. It owns and writes `data/walkie.db`.         |
 | `pixi run db-shell`   | Open `data/walkie.db` read-only in `sqlite3`, with sqlite-vec loaded. |
+| `pixi run db-seed`    | Write a sample house, people and conversation to `data/demo.db`. Never touches `walkie.db`. |
+| `pixi run db-browse`  | Browse every database in `data/` read-only at <http://127.0.0.1:8001>. |
 | `pixi run test`       | Run the tests. They use throwaway databases and need no robot.      |
 | `pixi run docs`       | Serve the documentation at <http://127.0.0.1:8000>.                 |
 | `pixi run docs-build` | Build the documentation, failing on any warning.                    |
@@ -57,6 +67,8 @@ pixi run db-shell
 | `src/walkie_database/db.py`         | Opens the file with the same settings every time          |
 | `src/walkie_database/migrate.py`    | Applies the schema migrations                             |
 | `src/walkie_database/migrations/`   | The schema, as numbered SQL files                         |
-| `tests/`                            | Tests for the connection, migrations, schema and node     |
-| `data/`                             | The database file. Not in Git.                            |
+| `src/walkie_database/seed.py`       | The sample data that `db-seed` writes                     |
+| `datasette-plugins/`                | Datasette plugins for `db-browse`                         |
+| `tests/`                            | Tests for the connection, migrations, schema, node and sample data |
+| `data/`                             | The database files. Not in Git.                           |
 | `docs/`                             | The documentation site (MkDocs)                           |

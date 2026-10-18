@@ -87,6 +87,7 @@ nav:
       - 3. Add SQLite and sqlite-vec: setup/03-sqlite.md
       - 4. Write the Schema and Migrations: setup/04-schema-and-migrations.md
       - 5. Run It as a ROS 2 Node: setup/05-ros-node.md
+      - 6. Add Sample Data and a Browser: setup/06-sample-data-and-browser.md
   - Architecture:
       - architecture/index.md
       - The Database: architecture/database.md

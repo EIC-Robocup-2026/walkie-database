@@ -82,6 +82,33 @@ try:
     indexes) store their data in these hidden "shadow" tables. Never write
     to them directly.
 
+### In a web browser, with sample data
+
+A new `walkie.db` has no rows yet. To see what a full one looks like, write
+a sample house, its people and a conversation to a separate file:
+
+```bash
+pixi run db-seed
+```
+
+This writes `data/demo.db` and never touches `data/walkie.db`. Then open
+every database in `data/` in your browser:
+
+```bash
+pixi run db-browse
+```
+
+Open <http://127.0.0.1:8001>, click `demo`, then a table. "Execute SQL" on
+the database page runs any `SELECT`, vector search included. Nothing you do
+there can change a file. Press ++ctrl+c++ to stop.
+
+!!! tip "Restart it after a re-seed"
+    `db-seed` replaces `demo.db` with a new file, but a running `db-browse`
+    keeps showing the old one. Stop it and run it again.
+
+To browse the robot's database from a laptop, see
+[On the robot](setup/06-sample-data-and-browser.md#on-the-robot).
+
 ## 6. Open the docs locally
 
 ```bash

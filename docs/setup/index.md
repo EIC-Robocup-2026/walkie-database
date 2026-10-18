@@ -11,3 +11,4 @@ steps in your own project, or when you add a new kind of memory.
 | [3. Add SQLite and sqlite-vec](03-sqlite.md)                        | Installs the database, its vector search, and opens it safely     |
 | [4. Write the schema and migrations](04-schema-and-migrations.md)   | Creates the tables, and a way to change them later                |
 | [5. Run it as a ROS 2 node](05-ros-node.md)                         | Wraps the database in the node that owns it                       |
+| [6. Add sample data and a browser](06-sample-data-and-browser.md)   | Fills a demo file, and shows any database in a web browser        |

@@ -44,5 +44,25 @@ docs-build = "mkdocs build --strict"
 mkdocs-material = ">=9.7,<10"
 mkdocs = ">=1.6,<2"
 
+# Datasette, a read-only web viewer, in its own environment so that its web
+# server dependencies stay out of the robot's environment.
+[feature.browse.dependencies]
+python = "3.12.*"
+# Datasette 1.0 (in alpha) changes plugins and settings; move to it on purpose.
+datasette = ">=0.65.5,<0.66"
+# Only the loadable vec0 library: Datasette loads it with --load-extension.
+libsqlite-vec = ">=0.1.9,<0.2"
+
+# Opens every file in data/ as its own database. The plugin hides the internal
+# tables behind vector, R*Tree, Geopoly and full-text tables.
+[feature.browse.tasks.db-browse]
+cmd = 'datasette serve data/*.db --load-extension "$CONDA_PREFIX/lib/sqlite-vec/vec0" --plugins-dir datasette-plugins'
+description = "Browse every database in data/ read-only in a web browser, at http://127.0.0.1:8001"
+
+[tasks.db-seed]
+cmd = "python -m walkie_database.seed"
+description = "Fill data/demo.db with a sample house, people and conversation (never data/walkie.db)"
+
 [environments]
 docs = { features = ["docs"], no-default-feature = true }
+browse = { features = ["browse"], no-default-feature = true }
