@@ -109,10 +109,16 @@ cmd = 'datasette serve data/*.db --load-extension "$CONDA_PREFIX/lib/sqlite-vec/
 ## Step 4: Hide the index tables
 
 Each virtual table keeps its data in ordinary tables named after it, its
-**shadow tables**: `object_box_node`, `face_arcface_vector_chunks00`, and so
-on. The schema makes 11 tables of its own, and its virtual tables add 35
-more. Datasette 0.65 hides only those of full-text tables, so the list of
-tables is mostly noise.
+**shadow tables**: `object_box_node`,
+`face_arcface_w600k_r50_vector_chunks00`, and so on. The schema makes 11
+tables of its own, and its virtual tables add 35 more. Datasette 0.65 hides
+only those of full-text tables, so the list of tables is mostly noise.
+
+On 2026-10-19,
+[migration 0002](04-schema-and-migrations.md#migration-0002-the-weights-in-the-name)
+renamed `face_arcface` to `face_arcface_w600k_r50` and `appearance_osnet` to
+`appearance_osnet_x1_0_msmt17`. This page uses the new names. A `demo.db`
+written before then still has the old ones: run `pixi run db-seed` again.
 
 `datasette-plugins/hide_shadow_tables.py` hides them. It asks SQLite with
 `PRAGMA table_list`, which reports each table's type, and hides:
@@ -147,7 +153,7 @@ open while the node runs, and it shows new rows as the node writes them.
 | Follow a foreign key                | Click a value in a column such as `room_id`                     |
 | Filter rows                         | Use the filter boxes above the table, or add `?label=cup` to the URL |
 | Run a query                         | Click "Execute SQL" on the database page. Only `SELECT` is allowed. |
-| See a vector as numbers             | `SELECT vec_to_json(embedding) FROM face_arcface LIMIT 1`       |
+| See a vector as numbers             | `SELECT vec_to_json(embedding) FROM face_arcface_w600k_r50 LIMIT 1` |
 | See a room's outline                | `SELECT rowid, geopoly_json(_shape) FROM room_shape`            |
 | Get JSON for a script               | Add `.json` to a page's URL, for example `/demo/object.json?_shape=array` |
 

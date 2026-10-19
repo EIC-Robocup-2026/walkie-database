@@ -1,12 +1,14 @@
 """The schema's promises: what each index finds, and what a delete removes."""
 
 import json
+import re
 import sqlite3
 
 import numpy as np
 import pytest
 
-from walkie_database.db import transaction
+from walkie_database.db import connect, transaction
+from walkie_database.migrate import load_migrations, migrate
 
 
 def unit(index: int) -> bytes:
@@ -135,10 +137,13 @@ def test_deleting_a_session_forgets_its_people_and_conversations(db):
         db.execute("INSERT INTO person (id, session_id, first_seen, last_seen) VALUES (2, NULL, 0, 0)")
         for face_id, person_id in ((1, 1), (2, 2)):
             db.execute("INSERT INTO face (id, person_id, ts) VALUES (?, ?, 0)", (face_id, person_id))
-            db.execute("INSERT INTO face_arcface VALUES (?, ?, ?)", (face_id, unit(face_id), person_id))
+            db.execute(
+                "INSERT INTO face_arcface_w600k_r50 VALUES (?, ?, ?)",
+                (face_id, unit(face_id), person_id),
+            )
         # The team member's clothes today belong to session 1.
         db.execute("INSERT INTO appearance (id, person_id, session_id, ts) VALUES (1, 2, 1, 0)")
-        db.execute("INSERT INTO appearance_osnet VALUES (1, ?, 2, 1)", (unit(3),))
+        db.execute("INSERT INTO appearance_osnet_x1_0_msmt17 VALUES (1, ?, 2, 1)", (unit(3),))
         db.execute("INSERT INTO conversation (id, session_id, started_at) VALUES (1, 1, 0)")
         db.execute(
             "INSERT INTO message (conversation_id, ts, role, person_id, text) "
@@ -149,8 +154,8 @@ def test_deleting_a_session_forgets_its_people_and_conversations(db):
         db.execute("DELETE FROM session WHERE id = 1")
 
     assert [row[0] for row in db.execute("SELECT id FROM person")] == [2]
-    assert [row[0] for row in db.execute("SELECT person_id FROM face_arcface")] == [2]
-    for table in ("appearance", "appearance_osnet", "conversation", "message"):
+    assert [row[0] for row in db.execute("SELECT person_id FROM face_arcface_w600k_r50")] == [2]
+    for table in ("appearance", "appearance_osnet_x1_0_msmt17", "conversation", "message"):
         assert count(db, table) == 0, table
     assert db.execute("SELECT count(*) FROM message_fts WHERE message_fts MATCH 'alice'").fetchone()[0] == 0
 
@@ -197,3 +202,81 @@ def test_strict_tables_reject_wrong_types(db):
                                        size_x, size_y, size_z, first_seen, last_seen)
                    VALUES ('m1', 'cup', 'one', 0, 0, 0, 0, 0, 0, 0)"""
             )
+
+
+def test_vector_tables_and_their_lengths(db):
+    # Callers choose a vector table by name and must match its length
+    # (ADR-0006), so renaming a table or changing a length breaks them.
+    rows = db.execute("SELECT name, sql FROM sqlite_master WHERE sql LIKE '%USING vec0%'")
+    lengths = {row["name"]: int(re.search(r"FLOAT\[(\d+)\]", row["sql"]).group(1)) for row in rows}
+    assert lengths == {
+        "room_clip_vit_b16": 512,
+        "object_clip_vit_b16": 512,
+        "face_arcface_w600k_r50": 512,
+        "appearance_osnet_x1_0_msmt17": 512,
+    }
+
+
+def test_migration_0002_copies_face_vectors_and_drops_appearance_vectors():
+    conn = connect(":memory:")
+    assert migrate(conn, load_migrations()[:1]) == 1
+    rng = np.random.default_rng(0)
+    faces = {face_id: rng.standard_normal(512).astype(np.float32).tobytes() for face_id in (1, 2, 3)}
+    with transaction(conn):
+        conn.execute("INSERT INTO person (id, first_seen, last_seen) VALUES (1, 0, 0)")
+        conn.execute("INSERT INTO person (id, first_seen, last_seen) VALUES (2, 0, 0)")
+        for face_id, person_id in ((1, 1), (2, 1), (3, 2)):
+            conn.execute("INSERT INTO face (id, person_id, ts) VALUES (?, ?, 0)", (face_id, person_id))
+            conn.execute(
+                "INSERT INTO face_arcface VALUES (?, ?, ?)", (face_id, faces[face_id], person_id)
+            )
+        conn.execute("INSERT INTO appearance (id, person_id, ts) VALUES (1, 1, 0)")
+        conn.execute("INSERT INTO appearance_osnet VALUES (1, ?, 1, 0)", (unit(0),))
+        # Person 2 turns out to be person 1. No v1 trigger updates face_arcface.
+        conn.execute("UPDATE face SET person_id = 1 WHERE id = 3")
+    old_tables = ("face_arcface", "appearance_osnet")
+    declared = {
+        row["name"]: row["sql"]
+        for row in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE name IN (?, ?)", old_tables
+        )
+    }
+
+    # Stop at 0002, so that a later migration does not change what this checks.
+    assert migrate(conn, load_migrations()[:2]) == 2
+
+    # Each new table is declared as its old one was: same columns, same metric.
+    for old, new in zip(old_tables, ("face_arcface_w600k_r50", "appearance_osnet_x1_0_msmt17")):
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (new,)).fetchone()[0]
+        assert sql == declared[old].replace(old, new)
+
+    # The same model under a new name: every face vector is kept as it was,
+    # with person_id taken from its face row.
+    rows = conn.execute(
+        "SELECT face_id, embedding, person_id FROM face_arcface_w600k_r50 ORDER BY face_id"
+    )
+    assert [tuple(row) for row in rows] == [(1, faces[1], 1), (2, faces[2], 1), (3, faces[3], 1)]
+    nearest = conn.execute(
+        "SELECT face_id FROM face_arcface_w600k_r50 WHERE embedding MATCH ? AND k = 1", (faces[3],)
+    ).fetchone()[0]
+    assert nearest == 3
+    # Different weights: the old appearance vectors are gone, the appearances stay.
+    assert count(conn, "appearance_osnet_x1_0_msmt17") == 0
+    assert count(conn, "appearance") == 1
+    # No old table, and none of its shadow tables, is left behind.
+    leftovers = conn.execute(
+        """SELECT name FROM sqlite_master
+           WHERE (name GLOB 'face_arcface*' AND name NOT GLOB 'face_arcface_w600k_r50*')
+              OR (name GLOB 'appearance_osnet*' AND name NOT GLOB 'appearance_osnet_x1_0_msmt17*')"""
+    ).fetchall()
+    assert leftovers == []
+
+    # The delete triggers now clean up the new tables.
+    with transaction(conn):
+        conn.execute("INSERT INTO appearance_osnet_x1_0_msmt17 VALUES (1, ?, 1, 0)", (unit(1),))
+    with transaction(conn):
+        conn.execute("DELETE FROM face WHERE id = 3")
+        conn.execute("DELETE FROM appearance WHERE id = 1")
+    assert [row[0] for row in conn.execute("SELECT face_id FROM face_arcface_w600k_r50")] == [1, 2]
+    assert count(conn, "appearance_osnet_x1_0_msmt17") == 0
+    conn.close()

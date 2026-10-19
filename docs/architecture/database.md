@@ -15,7 +15,8 @@ them by meaning, by position and by words.
   the vectors. The database only stores and searches them
   ([ADR-0006](decisions/0006-callers-send-vectors.md)).
 - **One vector table per model.** Vectors from different models cannot be
-  compared, so each model gets its own `vec0` table, named after it
+  compared, so each model gets its own `vec0` table, named after the model
+  and its weights
   ([ADR-0007](decisions/0007-sqlite-vec-one-table-per-model.md)).
 - **Positions belong to a map.** Every coordinate is in metres in the frame
   of one named map. Deleting a map deletes everything measured in it
@@ -103,15 +104,30 @@ Each index is a virtual table whose rows have the same id as the row they
 index: `object_box` row 10 is the box of `object` row 10. Virtual tables
 cannot have foreign keys, so triggers delete index rows with their owner.
 
-| Index                 | Kind      | Indexes      | Answers                                         |
-| --------------------- | --------- | ------------ | ----------------------------------------------- |
-| `room_shape`          | `geopoly` | `room`       | Which room is this point in?                    |
-| `room_clip_vit_b16`   | `vec0`    | `room`       | Which room looks most like "a kitchen"?         |
-| `object_box`          | `rtree`   | `object`     | What is near this point?                        |
-| `object_clip_vit_b16` | `vec0`    | `object`     | What looks most like "a red mug", in this room? |
-| `face_arcface`        | `vec0`    | `face`       | Whose face is this?                             |
-| `appearance_osnet`    | `vec0`    | `appearance` | Who is wearing these clothes?                   |
-| `message_fts`         | `fts5`    | `message`    | Which messages mention a drink?                 |
+| Index                          | Kind      | Indexes      | Answers                                         |
+| ------------------------------ | --------- | ------------ | ----------------------------------------------- |
+| `room_shape`                   | `geopoly` | `room`       | Which room is this point in?                    |
+| `room_clip_vit_b16`            | `vec0`    | `room`       | Which room looks most like "a kitchen"?         |
+| `object_box`                   | `rtree`   | `object`     | What is near this point?                        |
+| `object_clip_vit_b16`          | `vec0`    | `object`     | What looks most like "a red mug", in this room? |
+| `face_arcface_w600k_r50`       | `vec0`    | `face`       | Whose face is this?                             |
+| `appearance_osnet_x1_0_msmt17` | `vec0`    | `appearance` | Who is wearing these clothes?                   |
+| `message_fts`                  | `fts5`    | `message`    | Which messages mention a drink?                 |
+
+A caller picks a vector table by its name, and the database checks only the
+name and the length of the vector
+([ADR-0006](decisions/0006-callers-send-vectors.md)). So the name says
+which weights made the vectors, and a caller must use exactly those:
+
+| Vector table                   | Model and weights                                                                 |
+| ------------------------------ | --------------------------------------------------------------------------------- |
+| `face_arcface_w600k_r50`       | ArcFace R50 trained on WebFace600K, the recognition model of InsightFace's `buffalo_l` pack |
+| `appearance_osnet_x1_0_msmt17` | OSNet x1.0 trained for person re-identification on MSMT17: `osnet_x1_0_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter.pth` |
+
+Migration 0002 gave these two tables their names
+([Write the schema and migrations](../setup/04-schema-and-migrations.md#migration-0002-the-weights-in-the-name)).
+The CLIP tables, `room_clip_vit_b16` and `object_clip_vit_b16`, still name
+only the network.
 
 All vector tables use cosine distance: 0 means the same direction, 1 means
 unrelated, 2 means opposite. sqlite-vec compares the query with every
@@ -159,7 +175,7 @@ Vector queries are easier from Python.
     ```sql
     WITH matches AS (
         SELECT person_id, distance
-        FROM face_arcface
+        FROM face_arcface_w600k_r50
         WHERE embedding MATCH :face AND k = 5
     )
     SELECT p.id, p.name, min(matches.distance) AS distance

@@ -20,6 +20,7 @@ file is missing.
 | Path                                         | What it is                                       |
 | -------------------------------------------- | ------------------------------------------------ |
 | `src/walkie_database/migrations/0001_initial.sql` | The first schema: every table, index and trigger |
+| `src/walkie_database/migrations/0002_name_vector_tables_by_weights.sql` | Renames the face and appearance vector tables after their weights ([below](#migration-0002-the-weights-in-the-name)) |
 | `src/walkie_database/migrate.py`             | Finds the migrations and applies the missing ones |
 | `tests/test_migrate.py`                      | Tests for applying, refusing and rolling back    |
 | `tests/test_schema.py`                       | Tests for what each table and index promises     |
@@ -71,15 +72,22 @@ PRAGMA user_version = 1;    -- set it
   so a trigger deletes index rows when their owner goes. Triggers also run
   for rows that `ON DELETE CASCADE` removes, so deleting a map removes every
   object and index row in it.
-- **Vector tables are named after their model**, such as `face_arcface`
+- **Vector tables are named after their model and its weights**, such as
+  `face_arcface_w600k_r50`: ArcFace R50 trained on WebFace600K
   ([ADR-0007](../architecture/decisions/0007-sqlite-vec-one-table-per-model.md)).
+  Two sets of weights for the same network make vectors that cannot be
+  compared. `0001_initial.sql` named every vector table after the network
+  only. [Migration 0002](#migration-0002-the-weights-in-the-name) added the
+  weights to the face and appearance tables. The CLIP tables,
+  `room_clip_vit_b16` and `object_clip_vit_b16`, still name only the
+  network.
 - **No `NULL` in vector-table metadata.** sqlite-vec rejects it, so `0` means
   "none": an object in no room has `room_id = 0` in `object_clip_vit_b16`.
 
 ## Add a migration
 
 1. Create the next file in `src/walkie_database/migrations/`, for example
-   `0002_message_vectors.sql`. Numbers must run 1, 2, 3, ... without gaps,
+   `0003_message_vectors.sql`. Numbers must run 1, 2, 3, ... without gaps,
    and the name uses only lowercase letters, digits and `_`.
 2. Write the SQL. Do not write `BEGIN`, `COMMIT` or `PRAGMA user_version`:
    `migrate()` adds them.
@@ -101,6 +109,13 @@ PRAGMA user_version = 1;    -- set it
     [SQLite documentation](https://www.sqlite.org/lang_altertable.html#otheralter)
     lists the exact steps.
 
+!!! warning "A `vec0` table cannot be renamed"
+    sqlite-vec 0.1 does not rename a `vec0` table's shadow tables. After
+    `ALTER TABLE ... RENAME`, the table fails with
+    `no such table: main.<new name>_rowids`. Create the new table under its
+    final name and copy the rows into it instead, as
+    [migration 0002](#migration-0002-the-weights-in-the-name) does.
+
 !!! danger "Rebuilding a table that others point to"
     With foreign keys on, `DROP TABLE object` first deletes every row of
     `object`, and `ON DELETE CASCADE` then deletes every `object_cloud` and
@@ -110,3 +125,51 @@ PRAGMA user_version = 1;    -- set it
     inside one. The first migration that rebuilds such a table must also
     change `migrate()` so that it runs with foreign keys off, and checks
     them with `PRAGMA foreign_key_check` before it commits.
+
+## Migration 0002: the weights in the name
+
+Added on 2026-10-19. A caller picks a vector table by its name, and the
+database checks only the name and the length of the vector
+([ADR-0006](../architecture/decisions/0006-callers-send-vectors.md)).
+OSNet x1.0 makes 512 numbers whatever its weights, so `appearance_osnet`
+would take vectors from any OSNet x1.0 checkpoint, and a search would mix
+them without an error. `0002_name_vector_tables_by_weights.sql` puts the
+weights in the names of the face and appearance tables:
+
+| Before             | After                          | Weights                                                       | Rows    |
+| ------------------ | ------------------------------ | ------------------------------------------------------------- | ------- |
+| `face_arcface`     | `face_arcface_w600k_r50`       | ArcFace R50 trained on WebFace600K, from InsightFace's `buffalo_l` | Copied  |
+| `appearance_osnet` | `appearance_osnet_x1_0_msmt17` | OSNet x1.0 trained for person re-identification on MSMT17     | Dropped |
+
+**The face vectors are copied** because the model stays the same. They came
+from `buffalo_l`'s ArcFace R50, so they compare with every new face vector.
+Only the table's name changes. Each copy takes its `person_id` from its
+`face` row, because no trigger updates the copy in the vector table when a
+face moves to another person.
+
+**The appearance vectors are dropped** because the model changes. They came
+from OSNet x1.0 with ImageNet weights. ImageNet trains a network to name the
+object in a photo, not to tell one person from another, so these vectors
+never answered "who is wearing these clothes?" well. They also cannot be
+compared with vectors from the re-identification weights, so copying them
+would mix two kinds of vector in one table. The `appearance` rows stay. A
+caller can make new vectors from their `crop_path` images, where there is
+one.
+
+[ADR-0007](../architecture/decisions/0007-sqlite-vec-one-table-per-model.md)
+keeps an old table until every row has a vector from the new model, so that
+searches keep working during the change. The ImageNet vectors were not worth
+keeping, so `appearance_osnet` goes at once.
+
+The migration also:
+
+- creates each table again under its new name, because a `vec0` table
+  cannot be renamed (see the warning above), and
+- drops and creates again the `face_delete` and `appearance_delete`
+  triggers. Dropping a table does not drop a trigger that writes to it. The
+  old trigger would stay, and every later `DELETE FROM face` would fail with
+  `no such table: main.face_arcface`.
+
+`test_migration_0002_copies_face_vectors_and_drops_appearance_vectors` in
+`tests/test_schema.py` builds a database at version 1, adds faces and an
+appearance, migrates it to version 2 and checks each of these.

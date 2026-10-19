@@ -251,7 +251,8 @@ def seed(conn: sqlite3.Connection, *, now: float | None = None, rng_seed: int = 
                     "INSERT INTO face (person_id, ts) VALUES (?, ?)", (person_id, first_seen)
                 ).lastrowid
                 conn.execute(
-                    "INSERT INTO face_arcface (face_id, embedding, person_id) VALUES (?, ?, ?)",
+                    """INSERT INTO face_arcface_w600k_r50 (face_id, embedding, person_id)
+                       VALUES (?, ?, ?)""",
                     (face_id, _near(rng, face_center, spread=0.25), person_id),
                 )
             appearance_id = conn.execute(
@@ -259,7 +260,8 @@ def seed(conn: sqlite3.Connection, *, now: float | None = None, rng_seed: int = 
                 (person_id, session_id, max(first_seen, session_start), person.clothes),
             ).lastrowid
             conn.execute(
-                """INSERT INTO appearance_osnet (appearance_id, embedding, person_id, session_id)
+                """INSERT INTO appearance_osnet_x1_0_msmt17
+                       (appearance_id, embedding, person_id, session_id)
                    VALUES (?, ?, ?, ?)""",
                 (appearance_id, _near(rng, rng.standard_normal(DIMENSIONS)), person_id, session_id),
             )

@@ -17,12 +17,15 @@ different things.
 **Decision**
 
 - Each model gets its own `vec0` table, named `<what>_<model>`, for example
-  `object_clip_vit_b16` and `face_arcface`. All use cosine distance.
+  `face_arcface_w600k_r50`. `<model>` names the weights as well as the
+  network, because two sets of weights for one network make vectors that
+  cannot be compared. All use cosine distance.
 - A vector table's rows share ids with the table they index, and carry as
   metadata the columns that searches filter on, such as `map_id` and
   `room_id`.
 - A new model means a new migration with a new table. The old table stays
-  until every row has a vector from the new model.
+  until every row has a vector from the new model, unless its vectors are
+  not worth keeping. Then the same migration drops it.
 - `sqlite-vec-python` is pinned below 0.2.
 
 **Consequences**
@@ -39,6 +42,11 @@ different things.
   keeps them in step with their table.
 - A failed write to a `vec0` table can leave half a row behind, so every
   write must be inside a transaction.
+- sqlite-vec 0.1 cannot rename a `vec0` table. A migration that renames one
+  creates it again and copies the rows, as migration 0002 does.
+- `room_clip_vit_b16` and `object_clip_vit_b16` came before the rule that
+  `<model>` names the weights, so they name only the network. They need a
+  migration that adds their weights.
 - Moving to sqlite-vec 0.2 is a deliberate change, made after the tests pass.
 
 **See also:** [Add SQLite and sqlite-vec](/setup/03-sqlite.md),

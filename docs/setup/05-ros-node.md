@@ -37,8 +37,13 @@ pixi run db-node
 ```
 
 ```text
-[INFO] [walkie_database]: Opened data/walkie.db at schema version 1
+[INFO] [walkie_database]: Opened data/walkie.db at schema version 2
 ```
+
+The version is the number of the newest migration. It was 1 when this step
+was written. On 2026-10-19,
+[migration 0002](04-schema-and-migrations.md#migration-0002-the-weights-in-the-name)
+made it 2.
 
 !!! warning "One thread per connection"
     A Python `sqlite3` connection refuses to be used from a thread other than

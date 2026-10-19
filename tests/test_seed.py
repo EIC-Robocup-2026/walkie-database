@@ -46,12 +46,12 @@ def test_a_face_is_recognised_as_its_person(db):
     seed.seed(db)
     # Charlie has three face samples, so the two nearest to one of them are both his.
     person_id, embedding = db.execute(
-        """SELECT v.person_id, v.embedding FROM face_arcface v
+        """SELECT v.person_id, v.embedding FROM face_arcface_w600k_r50 v
            JOIN person p ON p.id = v.person_id
            WHERE p.name = 'Charlie' LIMIT 1"""
     ).fetchone()
     nearest = db.execute(
-        """SELECT person_id FROM face_arcface
+        """SELECT person_id FROM face_arcface_w600k_r50
            WHERE embedding MATCH ? AND k = 2 ORDER BY distance""",
         (embedding,),
     ).fetchall()
