@@ -31,6 +31,8 @@ pixi add "ros-jazzy-ros-base>=0.11,<0.12"
 
 The topics and services that store and search memory come in later steps,
 starting with [object memory](../architecture/object-memory.md).
+[Step 8](08-message-package.md) added the first one, `find_objects`, and a
+`map_id` parameter.
 
 ```bash
 pixi run db-node

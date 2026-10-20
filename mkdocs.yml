@@ -89,6 +89,7 @@ nav:
       - 5. Run It as a ROS 2 Node: setup/05-ros-node.md
       - 6. Add Sample Data and a Browser: setup/06-sample-data-and-browser.md
       - 7. Use the Zenoh Middleware: setup/07-zenoh.md
+      - 8. Add the Message Package: setup/08-message-package.md
   - Architecture:
       - architecture/index.md
       - The Database: architecture/database.md

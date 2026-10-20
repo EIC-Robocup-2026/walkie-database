@@ -31,12 +31,17 @@ them by meaning, by position and by words.
   walkie-ros does, so nodes find each other through a Zenoh router. The
   tests stay on Fast DDS
   ([ADR-0014](decisions/0014-zenoh-default-middleware.md)).
+- **Interfaces in this repository.** The node's messages and services are
+  in `walkie_database_msgs`, a package in `ros2_ws/src/`. Other
+  repositories build it from a pinned commit of this one
+  ([ADR-0015](decisions/0015-messages-in-this-repository.md)).
 
 ## The parts
 
 !!! note "Proposed"
-    Today the node opens the file and migrates it. The topics and services
-    below are the plan, starting with
+    Today the node opens the file, migrates it, and answers one service,
+    `find_objects` ([The node's interface](#the-nodes-interface)). The other
+    topics and services below are the plan, starting with
     [object memory](object-memory.md).
 
 ```mermaid
@@ -61,6 +66,82 @@ flowchart LR
 The node is the only program that writes the file. `pixi run db-shell` and
 other tools may open it read-only, because WAL mode lets them read while
 the node writes.
+
+## The node's interface
+
+The node is `/walkie_database`. Its message and service types are in the
+`walkie_database_msgs` package, in `ros2_ws/src/` of this repository, and
+`pixi run build-msgs` builds them
+([ADR-0015](decisions/0015-messages-in-this-repository.md)).
+
+| Parameter | Default          | What it is                                                                          |
+| --------- | ---------------- | ----------------------------------------------------------------------------------- |
+| `db_path` | `data/walkie.db` | The database file. The node creates it if needed and brings its schema up to date. |
+| `map_id`  | empty            | The map the robot is using (`map.id`). Requests that name no map search this one. On the robot, set it to the map the robot is localized in: while it is empty, every request that names no map fails. The node reads it on every request, so `ros2 param set` changes it at once. |
+
+| Service                         | Type                                   | What it does                                               |
+| ------------------------------- | -------------------------------------- | ---------------------------------------------------------- |
+| `/walkie_database/find_objects` | `walkie_database_msgs/srv/FindObjects` | Finds remembered objects by label in one map, newest first |
+
+### `find_objects`
+
+The request:
+
+| Field         | Type     | Meaning                                                                                  |
+| ------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `map_id`      | `string` | The map to search (`map.id`). Empty means the node's `map_id` parameter.                 |
+| `label`       | `string` | The label to look for, for example `cup`. Compared with `object.label` ignoring the case of ASCII letters, so `Cup` finds `cup`. Empty matches every object. |
+| `max_results` | `uint32` | At most this many objects. 0 means 10, and more than 100 means 100.                       |
+
+The response:
+
+| Field     | Type                 | Meaning                                                                                      |
+| --------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| `success` | `bool`               | False when the search could not run: no map was named, the map is not in the database, or the database failed. A search that finds nothing succeeds, with no objects. |
+| `message` | `string`             | For example `Found 2 objects.`, or why the search could not run. When `max_results` left objects out, it ends in `(more not shown).` instead. |
+| `objects` | `RememberedObject[]` | The matches, the most recently seen first                                                    |
+
+Each `RememberedObject` is one row of `object`:
+
+| Field          | Type                       | Meaning                                                             |
+| -------------- | -------------------------- | ------------------------------------------------------------------- |
+| `id`           | `int64`                    | `object.id`. Stays the same while the object is remembered.         |
+| `label`        | `string`                   | What the detector called it                                         |
+| `caption`      | `string`                   | A short description. Empty when there is none.                      |
+| `map_id`       | `string`                   | The map the object belongs to                                       |
+| `frame_id`     | `string`                   | That map's TF frame, `map.frame_id`, usually `map`                  |
+| `position`     | `geometry_msgs/Point`      | The centre of the object's box, in metres, in `frame_id`            |
+| `orientation`  | `geometry_msgs/Quaternion` | The box's rotation from the axes of `frame_id`                      |
+| `size`         | `geometry_msgs/Vector3`    | The box's full side lengths along its own axes, in metres           |
+| `room`         | `string`                   | The name of the room the object is in. Empty when it is in no room. |
+| `n_detections` | `uint32`                   | How many detections were merged into it. 0 for furniture drawn on the map. |
+| `last_seen`    | `builtin_interfaces/Time`  | When the object was last detected, or added if it never was         |
+
+A request searches exactly one map: the one it names, or else the node's
+`map_id` parameter. Objects in other maps have coordinates in another
+frame, so they are never returned
+([ADR-0008](decisions/0008-coordinates-in-a-named-map.md)). The call fails,
+with `success` false, in two cases:
+
+- The request and the parameter are both empty. `message` says that the
+  `map_id` parameter is empty.
+- The map is not in the `map` table, for example because of a typo.
+  `message` names the map and says whether it came from the request or from
+  the parameter. The node also logs a warning at start-up when its `map_id`
+  parameter names such a map.
+
+So a wrong map is never mistaken for a map with nothing in it
+([ADR-0015](decisions/0015-messages-in-this-repository.md)). Spaces at
+either end of `map_id` and `label` are ignored.
+
+The node answers one call at a time
+([ADR-0005](decisions/0005-one-node-owns-the-database.md)), so
+`max_results` has a cap that keeps each search short. A row that the
+message types cannot hold, such as a `last_seen` after 2038, fails the
+search with a message, instead of stopping the node when it sends the
+answer.
+[Getting Started](../getting-started.md#ask-it-for-objects) shows a call on
+the sample house.
 
 ## The tables
 
@@ -259,6 +340,8 @@ Vector queries are easier from Python.
 | Raw detections, for re-tuning     | A `ros2 bag` of the detection topic ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)) | No |
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |
 | Connection settings               | `src/walkie_database/db.py`                 | Yes    |
+| The node's messages and services  | `ros2_ws/src/walkie_database_msgs/`         | Yes    |
+| Their build                       | `ros2_ws/build/`, `install/` and `log/`, written by `pixi run build-msgs` | No |
 
 !!! tip "Back up with `VACUUM INTO`, not `cp`"
     While the node runs, recent changes may still be in `walkie.db-wal`, so
@@ -317,3 +400,7 @@ The object memory decisions, ADR-0011 to ADR-0013, are on the
 ??? success "ADR-0014: Use Zenoh as the default ROS 2 middleware · Accepted"
 
     --8<-- "architecture/decisions/0014-zenoh-default-middleware.md:body"
+
+??? success "ADR-0015: Keep the node's interfaces in a package in this repository · Accepted"
+
+    --8<-- "architecture/decisions/0015-messages-in-this-repository.md:body"

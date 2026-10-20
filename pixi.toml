@@ -26,6 +26,25 @@ sqlite-vec-python = ">=0.1.9,<0.2"
 sqlite = ">=3.54.1,<4"
 numpy = ">=2.5.4,<3"
 pytest = ">=9.1.1,<10"
+# Build toolchain for this repository's message package, walkie_database_msgs
+# in ros2_ws: the same set as walkie-vision uses. ros-base pulls in
+# ament_cmake, rosidl_default_generators, CMake and pkg-config only
+# indirectly, so they are listed here as well. The compilers build the C and
+# C++ type support and the Python extension that rosidl generates. Without
+# them and make here, CMake falls back to the system's tools, or to an apt ROS
+# install on PATH, if there is one.
+# colcon-core pins setuptools below 80, so this environment gets setuptools
+# 79.x. colcon-common-extensions also adds pytest-cov, pytest-repeat,
+# pytest-rerunfailures and coverage to the test environment. Their pytest
+# plugins do nothing unless their options are passed.
+colcon-common-extensions = "*"
+ros-jazzy-ament-cmake = "*"
+ros-jazzy-rosidl-default-generators = "*"
+c-compiler = "*"
+cxx-compiler = "*"
+cmake = "*"
+pkg-config = "*"
+make = "*"
 
 [pypi-dependencies]
 walkie-database = { path = ".", editable = true }
@@ -40,6 +59,25 @@ walkie-database = { path = ".", editable = true }
 [activation.env]
 RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
 
+# Sources ros2_ws's overlay, so that walkie_database_msgs can be imported once
+# it is built. Pixi runs this script before it applies [activation.env] and a
+# task's env.
+[activation]
+scripts = ["scripts/activate.sh"]
+
+# The same command as walkie-agent-ros's build-ros2 and walkie-vision's
+# build-msgs. Python3_EXECUTABLE is passed explicitly so a user-level
+# ~/.colcon/defaults.yaml (often set for an apt ROS install) cannot point CMake
+# at the system Python. The next `pixi run` or `pixi shell` sources the
+# overlay; the shell that ran the build does not.
+[tasks.build-msgs]
+cmd = "colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python"
+cwd = "ros2_ws"
+description = "Build the walkie_database_msgs package in ros2_ws with colcon"
+
+# The test task does not depend on build-msgs: pixi computes the environment
+# before it runs a dependency, so the overlay would still be missing in the
+# first run after a build. tests/conftest.py says what to run instead.
 [tasks.test]
 cmd = "pytest"
 description = "Run the test suite"

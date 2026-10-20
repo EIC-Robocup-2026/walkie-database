@@ -29,10 +29,16 @@ pixi --version
 git clone https://github.com/EIC-Robocup-2026/walkie-database.git
 cd walkie-database
 pixi install
+pixi run build-msgs
 ```
 
 `pixi install` downloads everything listed in `pixi.toml` into a hidden
 `.pixi/` folder inside the project. Nothing is installed system-wide.
+
+`pixi run build-msgs` builds the node's message and service types, the
+`walkie_database_msgs` package in `ros2_ws/`, with colcon. Every later
+`pixi run` and `pixi shell` can then use them. Run it again after you
+change a file in `ros2_ws/src/walkie_database_msgs/`.
 
 ## 3. Run the tests
 
@@ -41,7 +47,8 @@ pixi run test
 ```
 
 The tests use throwaway databases and need no robot. They run on Fast DDS,
-so they need no Zenoh router either. All tests should pass.
+so they need no Zenoh router either. All tests should pass. If you skipped
+`build-msgs`, they stop at once and tell you to run it.
 
 ## 4. Run the database node
 
@@ -91,6 +98,50 @@ To use another file, set the `db_path` parameter:
 pixi run python -m walkie_database.node --ros-args -p db_path:=/tmp/test.db
 ```
 
+On the robot, also set the `map_id` parameter to the map the robot is
+localized in, for example `-p map_id:=arena-2026-10-19`. Requests that name
+no map search that map, and they all fail while `map_id` is empty.
+
+### Ask it for objects
+
+The node answers the `find_objects` service: the remembered objects with a
+given label in one map, the most recently seen first
+([The node's interface](architecture/database.md#the-nodes-interface)). A
+new `walkie.db` has no objects yet, so try it on the sample house. This
+writes it to `data/demo.db` and never touches `data/walkie.db`:
+
+```bash
+pixi run db-seed
+```
+
+Stop the node in terminal 2, then run it on the sample file, in the sample
+house's map, `demo-house`:
+
+```bash title="Terminal 2: the database node"
+pixi run db-node --ros-args -p db_path:=data/demo.db -p map_id:=demo-house
+```
+
+Ask it for every cup:
+
+```bash title="Terminal 3"
+pixi run ros2 service call /walkie_database/find_objects walkie_database_msgs/srv/FindObjects "{label: cup}"
+```
+
+```text
+response:
+walkie_database_msgs.srv.FindObjects_Response(success=True, message='Found 2 objects.', objects=[walkie_database_msgs.msg.RememberedObject(id=4, label='cup', caption='a red mug with a handle on the counter', map_id='demo-house', frame_id='map', position=geometry_msgs.msg.Point(x=3.6, y=0.4, z=0.95), orientation=..., size=geometry_msgs.msg.Vector3(x=0.11, y=0.08, z=0.1), room='kitchen', n_detections=5, last_seen=...), walkie_database_msgs.msg.RememberedObject(id=3, label='cup', caption='a white ceramic cup on the table', ...)])
+```
+
+The sample kitchen has two cups, and the red mug comes first because it was
+seen last. Add `map_id` to the request to search another map, and
+`max_results` to get more than 10 objects. A map that is not in the file,
+such as `"{map_id: arena, label: cup}"`, gives `success=False` and a message
+that names it. The call reaches the node only through the Zenoh router in
+terminal 1, like `ros2 node list`.
+
+When you are done, press ++ctrl+c++ in terminal 2 to stop the node. Run
+`pixi run db-node` again to go back to `data/walkie.db`.
+
 ## 5. Look inside the database
 
 ```bash
@@ -118,7 +169,8 @@ try:
 ### In a web browser, with sample data
 
 A new `walkie.db` has no rows yet. To see what a full one looks like, write
-a sample house, its people and a conversation to a separate file:
+a sample house, its people and a conversation to a separate file. If you
+already ran this in [Ask it for objects](#ask-it-for-objects), skip it:
 
 ```bash
 pixi run db-seed
@@ -137,7 +189,8 @@ there can change a file. Press ++ctrl+c++ to stop.
 
 !!! tip "Restart it after a re-seed"
     `db-seed` replaces `demo.db` with a new file, but a running `db-browse`
-    keeps showing the old one. Stop it and run it again.
+    keeps showing the old one, and a `db-node` started on `demo.db` keeps
+    answering from it. Stop it and run it again.
 
 To browse the robot's database from a laptop, see
 [On the robot](setup/06-sample-data-and-browser.md#on-the-robot).

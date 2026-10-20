@@ -29,5 +29,10 @@ jobs:
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
 
+      # The node's tests import walkie_database_msgs, which colcon builds into
+      # ros2_ws/install; scripts/activate.sh sources it in the next pixi run.
+      - name: Build the message package
+        run: pixi run build-msgs
+
       - name: Run tests
         run: pixi run test

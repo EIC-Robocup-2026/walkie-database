@@ -7,7 +7,7 @@ costs later.
 
 | Page                                          | What it covers                                                                      |
 | --------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [The Database](database.md)                   | The node, the file, every table and index, example queries, and what lives where    |
+| [The Database](database.md)                   | The node and its interface, the file, every table and index, example queries, and what lives where |
 | [Object Memory (Proposed)](object-memory.md)  | How detections become merged objects, and how they reach RViz and MoveIt            |
 
 ## Architecture Decision Records

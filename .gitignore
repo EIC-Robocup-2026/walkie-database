@@ -3,6 +3,10 @@
 !.pixi/config.toml
 # The database itself and its WAL files (see docs/getting-started.md)
 data/
+# Output of `pixi run build-msgs`
+/ros2_ws/build/
+/ros2_ws/install/
+/ros2_ws/log/
 # MkDocs build output
 site/
 # Python

@@ -1,0 +1,22 @@
+# Find remembered objects by label in one map, most recently seen first.
+
+# The map to search (map.id). Empty means the node's map_id parameter, the
+# map the robot is using. Objects in other maps have coordinates in another
+# frame, so they are never returned (walkie-database ADR-0008). Spaces at
+# either end are ignored.
+string map_id
+# The label to look for, for example "cup". Compared with object.label
+# ignoring the case of ASCII letters, so "Cup" finds "cup". Empty matches
+# every object. Spaces at either end are ignored.
+string label
+# At most this many objects. 0 means 10, and more than 100 means 100.
+uint32 max_results
+---
+# False when the search could not run: no map was named, the map is not in
+# the database, or the database failed. message then says why. A search
+# that finds nothing succeeds with no objects.
+bool success
+# For example "Found 2 objects.". When max_results left objects out, it ends
+# in "(more not shown)." instead.
+string message
+RememberedObject[] objects
