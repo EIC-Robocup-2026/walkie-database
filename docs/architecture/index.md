@@ -9,6 +9,7 @@ costs later.
 | --------------------------------------------- | ----------------------------------------------------------------------------------- |
 | [The Database](database.md)                   | The node and its interface, the file, every table and index, example queries, and what lives where |
 | [Object Memory (Proposed)](object-memory.md)  | How detections become merged objects, and how they reach RViz and MoveIt            |
+| [Sim Harvest Support (Proposed)](harvest.md)  | What walkie-agent-ros's sim harvest needs from the database: a seeded sim instance restored for every episode |
 
 ## Architecture Decision Records
 

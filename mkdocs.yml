@@ -94,3 +94,4 @@ nav:
       - architecture/index.md
       - The Database: architecture/database.md
       - Object Memory (Proposed): architecture/object-memory.md
+      - Sim Harvest Support (Proposed): architecture/harvest.md

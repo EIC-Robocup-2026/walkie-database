@@ -404,3 +404,6 @@ The object memory decisions, ADR-0011 to ADR-0013, are on the
 ??? success "ADR-0015: Keep the node's interfaces in a package in this repository · Accepted"
 
     --8<-- "architecture/decisions/0015-messages-in-this-repository.md:body"
+
+The sim harvest decision, ADR-0016, is on the
+[Sim Harvest Support](harvest.md#decisions) page.
