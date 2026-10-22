@@ -341,7 +341,7 @@ Three things must be settled before ingestion runs in the sim:
   one episode's objects out of the next. ADR-0016 already covers this.
 
 Later still, the agent's planned `localize_object` atomic could ask memory
-for an object's position instead of walkie-ros's point-cloud-to-map step.
+for an object's position instead of asking walkie-ros perception.
 
 ### `classes` as negative evidence
 
