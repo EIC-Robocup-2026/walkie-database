@@ -2,7 +2,7 @@
 
 Every vec0, rtree, geopoly and fts5 table keeps its data in shadow tables
 named after it, such as ``object_box_node``. Datasette 0.65 hides only those
-of FTS tables, which leaves about 40 internal tables next to the 11 real
+of FTS tables, which leaves about 40 internal tables next to the 12 real
 ones. They stay reachable by URL and from SQL queries.
 
 A table is hidden when SQLite reports it as a shadow table, or when its name

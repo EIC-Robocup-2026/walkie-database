@@ -1,7 +1,7 @@
 # ADR-0010: A session owns the people and conversations in it
 
 <!-- --8<-- [start:body] -->
-**Status:** Proposed · **Date:** 2026-10-19
+**Status:** Accepted · **Date:** 2026-10-19
 
 **Context**
 
@@ -28,8 +28,8 @@ the objects stay.
 
 - "Forget this run" is one `DELETE FROM session`, and the cascades and
   triggers do the rest.
-- The agent must start and end sessions, through a service the node does not
-  have yet.
+- The agent starts and forgets sessions through the node's session services
+  ([ADR-0017](/architecture/decisions/0017-one-open-session.md)).
 - A permanent person keeps their faces but loses the appearance from a
   deleted session. They are recognized by face until a new appearance is
   recorded.

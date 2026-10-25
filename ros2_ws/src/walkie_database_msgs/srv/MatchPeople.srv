@@ -1,0 +1,33 @@
+# The stored people nearest each query, nearest first. The node serves this
+# type twice:
+#
+# - match_faces searches face samples. Its candidates are the people kept
+#   across sessions and the people met in the open session.
+# - match_appearances searches only the appearance samples recorded in the
+#   open session, because clothes change between sessions. With no session
+#   open, it finds no one.
+#
+# Each person is in a query's list once, with the distance of their nearest
+# sample (walkie-database ADR-0018). The node never decides whether a query
+# is a stranger.
+
+# At most 32. Each query is compared only with samples of its own model. An
+# empty list succeeds, with no results.
+ModelVector[] queries
+# At most this many people per query. 0 means 10, and more than 100 means
+# 100. Every list repeats the name and facts of each person in it, so ask
+# for no more people than you need.
+uint32 max_results
+---
+# False when the search could not run. That happens when a query names a
+# model with no table of its kind, has the wrong number of values, is all
+# zeros, or holds NaN or infinity, when there are more than 32 queries, or
+# when the database failed. message then says why. When the database failed,
+# it starts with "The database could not". A search that finds no one
+# succeeds, with empty lists.
+bool success
+# For example "Matched 2 queries.". When max_results left people out of any
+# list, it ends in "(more not shown)." instead.
+string message
+# One list per query, in the order of queries.
+PersonMatches[] results

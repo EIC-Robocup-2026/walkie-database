@@ -110,7 +110,7 @@ cmd = 'datasette serve data/*.db --load-extension "$CONDA_PREFIX/lib/sqlite-vec/
 
 Each virtual table keeps its data in ordinary tables named after it, its
 **shadow tables**: `object_box_node`,
-`face_arcface_w600k_r50_vector_chunks00`, and so on. The schema makes 11
+`face_arcface_w600k_r50_vector_chunks00`, and so on. The schema makes 12
 tables of its own, and its virtual tables add 35 more. Datasette 0.65 hides
 only those of full-text tables, so the list of tables is mostly noise.
 

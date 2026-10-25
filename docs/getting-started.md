@@ -139,6 +139,41 @@ such as `"{map_id: arena, label: cup}"`, gives `success=False` and a message
 that names it. The call reaches the node only through the Zenoh router in
 terminal 1, like `ros2 node list`.
 
+### Forget a session
+
+The sample file holds one session, the "Receptionist demo", with three
+guests: Charlie, Jane and one whose name the robot never learned. Robin is a
+team member, kept across sessions. Forget the session, with the node still
+running on `data/demo.db`:
+
+```bash title="Terminal 3"
+pixi run ros2 service call /walkie_database/end_session walkie_database_msgs/srv/EndSession "{session_id: 1}"
+```
+
+```text
+response:
+walkie_database_msgs.srv.EndSession_Response(success=True, message='Forgot session 1 and its 3 people.', session_id=1, people=3)
+```
+
+The guests are gone, with their faces, clothes and conversation. Robin
+stays. This only changes `data/demo.db`, and `pixi run db-seed` writes it
+again. Now start a new session:
+
+```bash title="Terminal 3"
+pixi run ros2 service call /walkie_database/start_session walkie_database_msgs/srv/StartSession "{label: demo}"
+```
+
+```text
+response:
+walkie_database_msgs.srv.StartSession_Response(success=True, message='Started session 2.', session_id=2, resumed=False, people=0, started_at=..., face_models=[walkie_database_msgs.msg.ModelInfo(model='arcface_w600k_r50', length=512)], appearance_models=[walkie_database_msgs.msg.ModelInfo(model='osnet_x1_0_msmt17', length=512)])
+```
+
+It gets id 2, not 1: a forgotten session's id is never given again.
+`remember_person`, `match_faces` and `match_appearances` take vectors of 512
+numbers, so code calls them, such as walkie-agent-ros's people memory, not
+the command line. [The node's interface](architecture/database.md#the-nodes-interface)
+describes all of them.
+
 When you are done, press ++ctrl+c++ in terminal 2 to stop the node. Run
 `pixi run db-node` again to go back to `data/walkie.db`.
 

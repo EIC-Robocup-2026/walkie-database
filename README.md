@@ -75,6 +75,7 @@ pixi run db-browse
 | Path                                | What it holds                                             |
 | ----------------------------------- | --------------------------------------------------------- |
 | `src/walkie_database/node.py`       | The ROS 2 node that owns the database                     |
+| `src/walkie_database/people.py`     | The SQL behind the people and session services            |
 | `src/walkie_database/db.py`         | Opens the file with the same settings every time          |
 | `src/walkie_database/migrate.py`    | Applies the schema migrations                             |
 | `src/walkie_database/migrations/`   | The schema, as numbered SQL files                         |
@@ -82,6 +83,6 @@ pixi run db-browse
 | `ros2_ws/src/walkie_database_msgs/` | The node's messages and services, built by `build-msgs`   |
 | `scripts/activate.sh`               | Adds the `build-msgs` output to every `pixi run`          |
 | `datasette-plugins/`                | Datasette plugins for `db-browse`                         |
-| `tests/`                            | Tests for the connection, migrations, schema, node and sample data |
+| `tests/`                            | Tests for the connection, migrations, schema, node, people and sample data |
 | `data/`                             | The database files. Not in Git.                           |
 | `docs/`                             | The documentation site (MkDocs)                           |

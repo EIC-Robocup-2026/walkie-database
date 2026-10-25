@@ -1,0 +1,31 @@
+# Remembers a new person, met in the open session, with their facts and
+# samples. When no session is open, the call starts one. The person is
+# forgotten with the session (walkie-database ADR-0010). Every call stores a
+# new person, so a retry after a lost answer may store them twice.
+
+# Empty stores a person whose name is not known. At most 100 characters.
+# Spaces at either end are ignored.
+string name
+# At most 32 facts, each with a different key.
+Fact[] facts
+# Face samples, for example from different angles. At most 100.
+ModelVector[] faces
+# Clothing and body samples. They are searched only in this session,
+# because clothes change. At most 100. faces and appearances together must
+# hold at least one vector, or the person could never be matched.
+ModelVector[] appearances
+---
+# False when nothing was stored. That happens when a vector names a model
+# with no table of its kind, has the wrong number of values, is all zeros,
+# or holds NaN or infinity, when a limit above is broken, or when the
+# database failed. message then says why, and names the field at fault, for
+# example "faces[3]". When the database failed, it starts with "The database
+# could not". StartSession's response lists the models the node takes.
+bool success
+# For example "Remembered Sam as person 12 in session 5, from 21 faces and
+# 20 appearances."
+string message
+# person.id of the new person. 0 when success is false.
+int64 person_id
+# The session the person joined. 0 when success is false.
+int64 session_id

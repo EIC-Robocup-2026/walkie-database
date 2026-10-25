@@ -27,6 +27,12 @@ them by meaning, by position and by words.
 - **Sessions forget guests.** People met in a session, their appearance and
   their conversations are deleted with the session. Objects and rooms stay
   ([ADR-0010](decisions/0010-session-owns-people-and-conversations.md)).
+- **One open session.** The agent starts and forgets sessions through the
+  node, and at most one is open
+  ([ADR-0017](decisions/0017-one-open-session.md)).
+- **One result per person.** A match returns each nearby person once, from
+  an exact scan
+  ([ADR-0018](decisions/0018-match-people-by-exact-scan.md)).
 - **Zenoh, like the robot.** Every `pixi run` uses `rmw_zenoh_cpp`, as
   walkie-ros does, so nodes find each other through a Zenoh router. The
   tests stay on Fast DDS
@@ -39,9 +45,10 @@ them by meaning, by position and by words.
 ## The parts
 
 !!! note "Proposed"
-    Today the node opens the file, migrates it, and answers one service,
-    `find_objects` ([The node's interface](#the-nodes-interface)). The other
-    topics and services below are the plan, starting with
+    Today the node opens the file, migrates it, and answers `find_objects`
+    and the people and session services
+    ([The node's interface](#the-nodes-interface)). The other topics and
+    services below are the plan, starting with
     [object memory](object-memory.md).
 
 ```mermaid
@@ -79,9 +86,26 @@ The node is `/walkie_database`. Its message and service types are in the
 | `db_path` | `data/walkie.db` | The database file. The node creates it if needed and brings its schema up to date. |
 | `map_id`  | empty            | The map the robot is using (`map.id`). Requests that name no map search this one. On the robot, set it to the map the robot is localized in: while it is empty, every request that names no map fails. The node reads it on every request, so `ros2 param set` changes it at once. |
 
-| Service                         | Type                                   | What it does                                               |
-| ------------------------------- | -------------------------------------- | ---------------------------------------------------------- |
-| `/walkie_database/find_objects` | `walkie_database_msgs/srv/FindObjects` | Finds remembered objects by label in one map, newest first |
+| Service                              | Type                                      | What it does                                               |
+| ------------------------------------ | ----------------------------------------- | ---------------------------------------------------------- |
+| `/walkie_database/find_objects`      | `walkie_database_msgs/srv/FindObjects`    | Finds remembered objects by label in one map, newest first |
+| `/walkie_database/start_session`     | `walkie_database_msgs/srv/StartSession`   | Resumes the open session, or forgets it and starts a new one |
+| `/walkie_database/end_session`       | `walkie_database_msgs/srv/EndSession`     | Forgets a session: deletes it, its people, its appearances and its conversations |
+| `/walkie_database/remember_person`   | `walkie_database_msgs/srv/RememberPerson` | Stores a new person in the open session, with facts, faces and appearances |
+| `/walkie_database/match_faces`       | `walkie_database_msgs/srv/MatchPeople`    | For each query, the people nearest by face, each once, nearest first |
+| `/walkie_database/match_appearances` | `walkie_database_msgs/srv/MatchPeople`    | The same, over the appearances recorded in the open session |
+
+Every response has `success` and `message`. A call fails in one of two
+ways:
+
+- **A refusal.** The request is wrong, for example a vector of a model the
+  database has no table for. `message` says what is wrong, and sending the
+  same request again gives the same answer.
+- **A database failure,** such as a locked or damaged file. `message`
+  starts with `The database could not`, and the same request may work
+  later.
+
+Callers tell the two apart by that prefix, so it is part of the interface.
 
 ### `find_objects`
 
@@ -143,6 +167,239 @@ answer.
 [Getting Started](../getting-started.md#ask-it-for-objects) shows a call on
 the sample house.
 
+### Sessions
+
+A session is one run of a task, such as one Receptionist attempt. The
+people met in it are forgotten with it
+([ADR-0010](decisions/0010-session-owns-people-and-conversations.md)). The
+open session is the `session` row whose `ended_at` is NULL, and at most one
+is open. The node keeps nothing about it in memory: it is all in the file
+([ADR-0017](decisions/0017-one-open-session.md)).
+
+```mermaid
+stateDiagram-v2
+  state "No session is open" as none
+  state "One session is open" as open
+  [*] --> none
+  none --> open: start_session, or remember_person
+  open --> open: start_session with resume keeps it
+  open --> open: start_session without resume forgets it and opens the next
+  open --> none: end_session forgets it
+```
+
+- `start_session` with `resume` true keeps the open session, so the guests
+  met before an agent restart are still recognised. With `resume` false, it
+  forgets the open session and starts the next one, in one transaction, so
+  there is never a moment with no open session.
+- `end_session` forgets a session. There is no "end and keep": the people
+  of a session that is not open are never searched again, so keeping them
+  would only keep personal data.
+- `remember_person` adds the person to the open session. When none is open,
+  it starts one.
+- A restart of the node changes nothing, because the open session is in the
+  file.
+- When to resume is the agent's choice, not the node's. walkie-agent-ros
+  plans to forget the open session at each new task, once its people
+  memory client exists. Today nothing in it calls these services.
+- Session and person ids are never given twice, also after a forget. A new
+  session never gets the id of a forgotten one, so a retried `end_session`
+  never forgets a newer session by mistake.
+- Guests stay on disk while the agent is stopped, until the next
+  `start_session` without `resume`, or an `end_session`.
+
+### `start_session`
+
+The request:
+
+| Field    | Type     | Meaning                                                                                       |
+| -------- | -------- | --------------------------------------------------------------------------------------------- |
+| `label`  | `string` | Stored as `session.label`, for example `walkie-agent`. Empty stores none. Spaces at either end are ignored. Ignored when the open session is resumed. |
+| `resume` | `bool`   | True: keep the open session and return it. A new session starts only when none is open. False: forget the open session and its people first, then start a new one. |
+
+The response:
+
+| Field               | Type                      | Meaning                                                                       |
+| ------------------- | ------------------------- | ----------------------------------------------------------------------------- |
+| `success`           | `bool`                    | False when the database failed                                                |
+| `message`           | `string`                  | For example `Started session 5.`, `Resumed session 4, with 2 people.` or `Forgot session 4 and its 2 people, and started session 5.` |
+| `session_id`        | `int64`                   | `session.id` of the open session                                              |
+| `resumed`           | `bool`                    | True when the open session was kept instead of a new one started              |
+| `people`            | `uint32`                  | How many people the open session holds. 0 for a new session.                  |
+| `started_at`        | `builtin_interfaces/Time` | When the open session started                                                 |
+| `face_models`       | `ModelInfo[]`             | The face models the node stores and searches, in the order of their names     |
+| `appearance_models` | `ModelInfo[]`             | The same for appearances                                                      |
+
+The node refuses a vector of any model that is not in these lists
+([Vectors](#vectors)). A caller that has vectors of several models, for
+example during a switch to new weights, leaves the others out before it
+sends, and logs that it did. Only a migration changes the lists.
+
+### `end_session`
+
+The request:
+
+| Field        | Type    | Meaning                                                                                        |
+| ------------ | ------- | ---------------------------------------------------------------------------------------------- |
+| `session_id` | `int64` | The session to forget, `session.id`. 0 means the open session. It may name a session that has ended, such as the sample data's "Receptionist demo". |
+
+The response:
+
+| Field        | Type     | Meaning                                                                       |
+| ------------ | -------- | ----------------------------------------------------------------------------- |
+| `success`    | `bool`   | False when the database failed. Forgetting a session that is not there succeeds, and forgets nothing. |
+| `message`    | `string` | For example `Forgot session 4 and its 2 people.`, `No session is open, so nothing was forgotten.` or `Session 9 is not in the database, so nothing was forgotten.` |
+| `session_id` | `int64`  | The session that was forgotten. 0 when there was none.                       |
+| `people`     | `uint32` | How many people were forgotten with it                                        |
+
+It deletes the session, the people met in it with their faces and
+appearances, every appearance recorded in it, also of people who stay, and
+its conversations with their messages. Object observations made in it lose
+their `session_id`, and the objects stay. People kept across sessions stay,
+with their faces. This cannot be undone.
+
+A retry with the same `session_id` after a lost answer is safe, because ids
+are never given twice. A retry with 0 forgets whichever session is open by
+then.
+
+### `remember_person`
+
+The request:
+
+| Field         | Type            | Meaning                                                                    |
+| ------------- | --------------- | -------------------------------------------------------------------------- |
+| `name`        | `string`        | Empty stores a person whose name is not known                              |
+| `facts`       | `Fact[]`        | What the person told the robot, stored in `person.attributes`              |
+| `faces`       | `ModelVector[]` | Face samples, for example from different angles                            |
+| `appearances` | `ModelVector[]` | Clothing and body samples. They are searched only in this session, because clothes change. |
+
+The response:
+
+| Field        | Type     | Meaning                                                                       |
+| ------------ | -------- | ----------------------------------------------------------------------------- |
+| `success`    | `bool`   | False when nothing was stored: a refusal, or a database failure               |
+| `message`    | `string` | For example `Remembered Sam as person 12 in session 5, from 21 faces and 20 appearances.`, or why nothing was stored, naming the field at fault, such as `faces[3]` |
+| `person_id`  | `int64`  | `person.id` of the new person. 0 when `success` is false.                    |
+| `session_id` | `int64`  | The session the person joined. 0 when `success` is false.                    |
+
+The person joins the open session. When no session is open, the call starts
+one, and `message` says so. The limits:
+
+| What                 | Limit                                        |
+| -------------------- | -------------------------------------------- |
+| `name`               | At most 100 characters                       |
+| `facts`              | At most 32, each with a different key        |
+| A fact's key         | 1 to 64 characters                           |
+| A fact's value       | 1 to 256 characters                          |
+| `faces`              | At most 100                                  |
+| `appearances`        | At most 100                                  |
+| Vectors              | At least one face or appearance, or the person could never be matched |
+
+Spaces at either end of the name, keys and values are ignored. The facts
+are stored as a JSON object of strings, in the order they were sent. The
+node checks the whole request before it writes anything, and the writes are
+one transaction, so a refused or failed call stores nothing.
+
+Every call stores a new person. So a retry after a lost answer may store
+the same person twice.
+
+### `match_faces` and `match_appearances`
+
+Both services take the same request and give the same response
+(`MatchPeople`). They differ in who they search:
+
+| Service             | Searches                                                                      |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `match_faces`       | The faces of people kept across sessions, and of the open session's people. With no open session, only the kept people. |
+| `match_appearances` | Only the appearances recorded in the open session, of anyone. With no open session, no one. |
+
+The request:
+
+| Field         | Type            | Meaning                                                                    |
+| ------------- | --------------- | -------------------------------------------------------------------------- |
+| `queries`     | `ModelVector[]` | At most 32. Each query is compared only with samples of its own model. An empty list succeeds, with no results. |
+| `max_results` | `uint32`        | At most this many people per query. 0 means 10, and more than 100 means 100. |
+
+The response:
+
+| Field     | Type              | Meaning                                                                       |
+| --------- | ----------------- | ----------------------------------------------------------------------------- |
+| `success` | `bool`            | False when the search could not run: a refusal, or a database failure. A search that finds no one succeeds, with empty lists. |
+| `message` | `string`          | For example `Matched 2 queries.`. When `max_results` left people out of any list, it ends in `(more not shown).` instead. It also says when no session is open. |
+| `results` | `PersonMatches[]` | One list per query, in the order of `queries`                                 |
+
+Each list holds each person once, with the cosine distance of their nearest
+sample, nearest first. People at the same distance are in the order of
+their id. The node never decides whether a query is a stranger. The caller
+applies its own limit for each model, measured on real faces and cameras
+([ADR-0018](decisions/0018-match-people-by-exact-scan.md)).
+
+People kept across sessions are face candidates in every session. A caller
+that wants guests only leaves out the matches whose `session_id` is 0.
+Every list repeats the name and facts of each person in it, so ask for no
+more people than you need.
+
+### Vectors
+
+Every vector names its model, and the node compares it only with samples of
+that model, in the vector table `face_<model>` or `appearance_<model>`
+([ADR-0006](decisions/0006-callers-send-vectors.md),
+[ADR-0007](decisions/0007-sqlite-vec-one-table-per-model.md)). The node
+refuses, with a message that names the field, such as `faces[3]` or
+`queries[0]`:
+
+- a model with no table of that kind. The message lists the models there
+  are;
+- a vector with the wrong number of values, 512 for both people tables;
+- a vector that holds NaN or infinity;
+- a vector of all zeros, which has no direction.
+
+It then scales each vector to length 1, which keeps every cosine distance.
+So raw ArcFace and OSNet outputs are fine as they are.
+
+### The people messages
+
+`ModelVector`, one embedding and the model that made it:
+
+| Field       | Type        | Meaning                                                                       |
+| ----------- | ----------- | ----------------------------------------------------------------------------- |
+| `model`     | `string`    | The `<model>` part of the vector table's name, for example `arcface_w600k_r50` for `face_arcface_w600k_r50` |
+| `embedding` | `float32[]` | The vector. Named like every other embedding field, so that a filter on fields named `*embedding` catches it. |
+
+In Python, build it as `ModelVector(model=..., embedding=...)`. On Jazzy,
+rclpy drops a keyword argument that is not a field, with no error, unless
+`ROS_PYTHON_CHECK_FIELDS=1` is set or the call passes `check_fields=True`.
+So a vector sent as `values=...` arrives empty, and the node refuses it
+with `faces[0] has 0 values, but arcface_w600k_r50 vectors have 512.`.
+Client tests should build these messages with `check_fields=True`, so that
+a wrong field name fails at once.
+
+`ModelInfo`, one model the node takes:
+
+| Field    | Type     | Meaning                                         |
+| -------- | -------- | ----------------------------------------------- |
+| `model`  | `string` | As in `ModelVector.model`                       |
+| `length` | `uint32` | How many values each vector has, for example 512 |
+
+`Fact`, one thing a person told the robot:
+
+| Field   | Type     | Meaning                                                                       |
+| ------- | -------- | ----------------------------------------------------------------------------- |
+| `key`   | `string` | For example `drink`                                                           |
+| `value` | `string` | For example `coke`. A value stored in JSON as something other than a string, such as `true`, comes back as its JSON text, `"true"`. |
+
+`PersonMatch`, one stored person near a query:
+
+| Field        | Type      | Meaning                                                                      |
+| ------------ | --------- | ---------------------------------------------------------------------------- |
+| `person_id`  | `int64`   | `person.id`. Never given to two people, also after a forget.                 |
+| `session_id` | `int64`   | The session that met them. 0 for a person kept across sessions.              |
+| `name`       | `string`  | Empty while the robot does not know it                                       |
+| `facts`      | `Fact[]`  | `person.attributes`, in the order they were stored                           |
+| `distance`   | `float32` | The cosine distance from the query to this person's nearest sample: 0 is the same direction, 1 is unrelated, 2 is opposite |
+
+`PersonMatches` holds one query's list, `PersonMatch[] people`, nearest
+first.
+
 ## The tables
 
 Arrows point from the table that owns a row to the rows it owns. Deleting
@@ -168,7 +425,8 @@ erDiagram
 | Table                | One row is                                                                | Notes                                                                           |
 | -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `map`                | A map the robot built, for example `arena-2026-10-19`                     | `frame_id` is the TF frame its coordinates are in, usually `map`                 |
-| `session`            | One run of a task, for example one Receptionist attempt                   |                                                                                 |
+| `session`            | One run of a task, for example one Receptionist attempt                   | At most one is open (`ended_at` NULL): the session the agent is in. Migration 0003's `session_one_open` index refuses a second. |
+| `last_id`            | The largest id ever given in `session`, and in `person`                   | The node gives a new session or person the next id, so no id is given twice. Triggers keep it up to date. |
 | `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room                       |
 | `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand) |
 | `object_cloud`       | The merged point cloud of one object                                      | Its own table, so reading `object` never loads the points                      |
@@ -215,6 +473,12 @@ unrelated, 2 means opposite. sqlite-vec compares the query with every
 vector, with no approximate index. On a laptop, that takes about 7 ms for
 10,000 vectors of 512 numbers, and about 75 ms for 100,000.
 
+That is a KNN search (`MATCH ... AND k`). The people services compute every
+distance in SQL instead, so that each person counts once
+([ADR-0018](decisions/0018-match-people-by-exact-scan.md)). That reads each
+embedding out of the table, about 10 µs per sample: 5 ms for 600 samples
+and 55 ms for 5,000, per query.
+
 A vector table takes no space until its first row. Then it reserves room
 for 1,024 vectors at once: about 2 MB for 512 numbers each. A file with a
 few rows in each vector table is therefore already about 8 MB.
@@ -251,25 +515,82 @@ Vector queries are easier from Python.
 
 === "Recognize a face"
 
-    The person whose face samples are closest to a new face.
+    The people nearest a new face, each once, nearest first, with the
+    distance of their nearest sample. This is `match_faces`'s query.
+    `:session` is the open session's id, or NULL when none is open.
 
     ```sql
-    WITH matches AS (
-        SELECT person_id, distance
+    WITH sample AS MATERIALIZED (
+        SELECT face_id, vec_distance_cosine(embedding, :face) AS distance
         FROM face_arcface_w600k_r50
-        WHERE embedding MATCH :face AND k = 5
     )
-    SELECT p.id, p.name, min(matches.distance) AS distance
-    FROM matches JOIN person p ON p.id = matches.person_id
+    SELECT p.id AS person_id, p.session_id, p.name, p.attributes,
+           min(s.distance) AS distance
+    FROM sample AS s
+    CROSS JOIN face AS f ON f.id = s.face_id
+    CROSS JOIN person AS p ON p.id = f.person_id
+    WHERE s.distance IS NOT NULL
+      AND (p.session_id IS NULL OR p.session_id = :session)
     GROUP BY p.id
-    ORDER BY distance
-    LIMIT 1;
+    ORDER BY distance, p.id
+    LIMIT 10;
     ```
 
-    A person has several face samples, so this takes the 5 nearest faces and
-    keeps each person's best one. The database always returns someone: the
-    caller decides above which distance the face is a stranger. That limit
-    depends on the model and the cameras, so measure it on real faces.
+    - `MATERIALIZED` computes every sample's distance once, before the
+      joins.
+    - `CROSS JOIN` fixes the join order in SQLite, so the samples are read
+      once. With a plain `JOIN`, SQLite may read them again for each row of
+      the other table.
+    - `s.distance IS NOT NULL` skips a stored vector of all zeros, whose
+      distance is NULL.
+
+    A KNN search with `k` would not do here. It returns the nearest
+    samples, not people, and a person has about 20 samples. So the 5
+    nearest samples are often all one person's
+    ([ADR-0018](decisions/0018-match-people-by-exact-scan.md)).
+
+    The database always returns someone: the caller decides above which
+    distance the face is a stranger. That limit depends on the model and
+    the cameras, so measure it on real faces.
+
+=== "Who is wearing these clothes"
+
+    The same for appearances. Only the appearances recorded in the open
+    session count, because clothes change.
+
+    ```sql
+    WITH sample AS MATERIALIZED (
+        SELECT appearance_id, vec_distance_cosine(embedding, :clothes) AS distance
+        FROM appearance_osnet_x1_0_msmt17
+        WHERE session_id = :session
+    )
+    SELECT p.id AS person_id, p.session_id, p.name, p.attributes,
+           min(s.distance) AS distance
+    FROM sample AS s
+    CROSS JOIN appearance AS a ON a.id = s.appearance_id
+    CROSS JOIN person AS p ON p.id = a.person_id
+    WHERE s.distance IS NOT NULL AND a.session_id = :session
+    GROUP BY p.id
+    ORDER BY distance, p.id
+    LIMIT 10;
+    ```
+
+    The vector table's `session_id` is a copy of `appearance.session_id`.
+    Filtering on it in the scan skips reading other sessions' vectors. The
+    join checks the real column.
+
+=== "Forget a session"
+
+    ```sql
+    DELETE FROM session WHERE id = :session;
+    ```
+
+    This deletes the people met in the session with their faces and
+    appearances, every appearance recorded in it, and its conversations
+    with their messages. The triggers delete their vectors. Object
+    observations lose their `session_id`. This is what `end_session` runs.
+    Run it through the node, which owns the file
+    ([ADR-0005](decisions/0005-one-node-owns-the-database.md)).
 
 === "Messages by words"
 
@@ -390,7 +711,7 @@ Vector queries are easier from Python.
 
     --8<-- "architecture/decisions/0009-sql-migrations-user-version.md:body"
 
-??? note "ADR-0010: A session owns the people and conversations in it · Proposed"
+??? success "ADR-0010: A session owns the people and conversations in it · Accepted"
 
     --8<-- "architecture/decisions/0010-session-owns-people-and-conversations.md:body"
 
@@ -407,3 +728,11 @@ The object memory decisions, ADR-0011 to ADR-0013, are on the
 
 The sim harvest decision, ADR-0016, is on the
 [Sim Harvest Support](harvest.md#decisions) page.
+
+??? success "ADR-0017: The node keeps one open session, which the agent starts and forgets · Accepted"
+
+    --8<-- "architecture/decisions/0017-one-open-session.md:body"
+
+??? success "ADR-0018: Match people with an exact scan, one result per person · Accepted"
+
+    --8<-- "architecture/decisions/0018-match-people-by-exact-scan.md:body"

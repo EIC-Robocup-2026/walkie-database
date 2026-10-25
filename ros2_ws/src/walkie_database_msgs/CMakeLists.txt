@@ -7,8 +7,17 @@ find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/Fact.msg"
+  "msg/ModelInfo.msg"
+  "msg/ModelVector.msg"
+  "msg/PersonMatch.msg"
+  "msg/PersonMatches.msg"
   "msg/RememberedObject.msg"
+  "srv/EndSession.srv"
   "srv/FindObjects.srv"
+  "srv/MatchPeople.srv"
+  "srv/RememberPerson.srv"
+  "srv/StartSession.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs
 )
 

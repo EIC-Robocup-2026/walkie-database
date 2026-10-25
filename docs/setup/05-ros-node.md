@@ -32,20 +32,24 @@ pixi add "ros-jazzy-ros-base>=0.11,<0.12"
 The topics and services that store and search memory come in later steps,
 starting with [object memory](../architecture/object-memory.md).
 [Step 8](08-message-package.md) added the first one, `find_objects`, and a
-`map_id` parameter.
+`map_id` parameter. [Step 9](09-people-services.md) added the people and
+session services.
 
 ```bash
 pixi run db-node
 ```
 
 ```text
-[INFO] [walkie_database]: Opened data/walkie.db at schema version 2
+[INFO] [walkie_database]: Opened data/walkie.db at schema version 3
 ```
 
 The version is the number of the newest migration. It was 1 when this step
 was written. On 2026-10-19,
 [migration 0002](04-schema-and-migrations.md#migration-0002-the-weights-in-the-name)
-made it 2.
+made it 2. On 2026-10-26,
+[migration 0003](04-schema-and-migrations.md#migration-0003-one-open-session)
+made it 3. When a session is open, a second line names it, such as
+`Session 1 is open, with 3 people.`
 
 !!! warning "One thread per connection"
     A Python `sqlite3` connection refuses to be used from a thread other than

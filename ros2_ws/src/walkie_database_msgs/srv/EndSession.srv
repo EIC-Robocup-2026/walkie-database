@@ -1,0 +1,22 @@
+# Forgets a session. It deletes the session, the people met in it with their
+# faces and appearances, every appearance recorded in it, and its
+# conversations (walkie-database ADR-0010). People kept across sessions stay.
+# This cannot be undone.
+
+# The session to forget, session.id. 0 means the open session. The id may
+# name a session that has ended.
+int64 session_id
+---
+# False when the database failed. message then starts with "The database
+# could not" and says why. Forgetting a session that is not there succeeds
+# and forgets nothing. Session ids are never given twice, so a retry with the
+# same session_id after a lost answer is safe. A retry with 0 forgets
+# whichever session is open by then.
+bool success
+# For example "Forgot session 4 and its 2 people." or "No session is open,
+# so nothing was forgotten."
+string message
+# The session that was forgotten. 0 when there was none.
+int64 session_id
+# How many people were forgotten with it.
+uint32 people

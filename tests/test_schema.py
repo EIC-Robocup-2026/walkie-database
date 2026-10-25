@@ -280,3 +280,52 @@ def test_migration_0002_copies_face_vectors_and_drops_appearance_vectors():
     assert [row[0] for row in conn.execute("SELECT face_id FROM face_arcface_w600k_r50")] == [1, 2]
     assert count(conn, "appearance_osnet_x1_0_msmt17") == 0
     conn.close()
+
+
+def test_only_one_session_can_be_open(db):
+    db.execute("INSERT INTO session (started_at) VALUES (0)")
+
+    with pytest.raises(sqlite3.IntegrityError, match="session_one_open"):
+        db.execute("INSERT INTO session (started_at) VALUES (1)")
+    # Ended sessions are not limited.
+    db.execute("INSERT INTO session (started_at, ended_at) VALUES (1, 2)")
+    db.execute("INSERT INTO session (started_at, ended_at) VALUES (3, 4)")
+    assert count(db, "session") == 3
+
+
+def test_last_id_keeps_the_largest_id_ever_given(db):
+    db.execute("INSERT INTO session (id, started_at, ended_at) VALUES (7, 0, 1)")
+    db.execute("INSERT INTO person (id, first_seen, last_seen) VALUES (5, 0, 0)")
+    db.execute("DELETE FROM session")
+    db.execute("DELETE FROM person")
+    # SQLite gives the same ids again. last_id does not go back.
+    db.execute("INSERT INTO session (started_at) VALUES (0)")
+    db.execute("INSERT INTO person (first_seen, last_seen) VALUES (0, 0)")
+
+    rows = db.execute("SELECT table_name, id FROM last_id ORDER BY table_name")
+    assert [tuple(row) for row in rows] == [("person", 5), ("session", 7)]
+
+
+def test_migration_0003_closes_all_but_the_newest_open_session():
+    conn = connect(":memory:")
+    assert migrate(conn, load_migrations()[:2]) == 2
+    with transaction(conn):
+        for session_id, started_at in ((1, 10.0), (2, 20.0), (3, 5.0)):
+            conn.execute(
+                "INSERT INTO session (id, started_at) VALUES (?, ?)", (session_id, started_at)
+            )
+            conn.execute(
+                "INSERT INTO person (session_id, first_seen, last_seen) VALUES (?, 0, 0)",
+                (session_id,),
+            )
+        conn.execute("INSERT INTO session (id, started_at, ended_at) VALUES (4, 1, 2)")
+
+    assert migrate(conn, load_migrations()[:3]) == 3
+
+    rows = conn.execute("SELECT id, ended_at FROM session ORDER BY id")
+    # Session 2 started last, so it stays open. The others end when they started.
+    assert [tuple(row) for row in rows] == [(1, 10.0), (2, None), (3, 5.0), (4, 2.0)]
+    assert count(conn, "person") == 3
+    rows = conn.execute("SELECT table_name, id FROM last_id ORDER BY table_name")
+    assert [tuple(row) for row in rows] == [("person", 3), ("session", 4)]
+    conn.close()

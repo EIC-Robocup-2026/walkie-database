@@ -21,6 +21,7 @@ file is missing.
 | -------------------------------------------- | ------------------------------------------------ |
 | `src/walkie_database/migrations/0001_initial.sql` | The first schema: every table, index and trigger |
 | `src/walkie_database/migrations/0002_name_vector_tables_by_weights.sql` | Renames the face and appearance vector tables after their weights ([below](#migration-0002-the-weights-in-the-name)) |
+| `src/walkie_database/migrations/0003_one_open_session_and_unique_ids.sql` | Allows at most one open session, and keeps session and person ids from being given twice ([below](#migration-0003-one-open-session)) |
 | `src/walkie_database/migrate.py`             | Finds the migrations and applies the missing ones |
 | `tests/test_migrate.py`                      | Tests for applying, refusing and rolling back    |
 | `tests/test_schema.py`                       | Tests for what each table and index promises     |
@@ -87,7 +88,7 @@ PRAGMA user_version = 1;    -- set it
 ## Add a migration
 
 1. Create the next file in `src/walkie_database/migrations/`, for example
-   `0003_message_vectors.sql`. Numbers must run 1, 2, 3, ... without gaps,
+   `0004_message_vectors.sql`. Numbers must run 1, 2, 3, ... without gaps,
    and the name uses only lowercase letters, digits and `_`.
 2. Write the SQL. Do not write `BEGIN`, `COMMIT` or `PRAGMA user_version`:
    `migrate()` adds them.
@@ -173,3 +174,43 @@ The migration also:
 `test_migration_0002_copies_face_vectors_and_drops_appearance_vectors` in
 `tests/test_schema.py` builds a database at version 1, adds faces and an
 appearance, migrates it to version 2 and checks each of these.
+
+## Migration 0003: one open session
+
+Added on 2026-10-26, with the people and session services
+([9. Add the people and session services](09-people-services.md)). The
+open session is the `session` row whose `ended_at` is NULL: the session the
+agent is in
+([ADR-0017](../architecture/decisions/0017-one-open-session.md)).
+`0003_one_open_session_and_unique_ids.sql` makes two changes.
+
+**At most one session is open.** A partial unique index allows one row with
+`ended_at` NULL:
+
+```sql
+CREATE UNIQUE INDEX session_one_open ON session ((ended_at IS NULL))
+WHERE ended_at IS NULL;
+```
+
+Every open row indexes the same value, `1`, so a second one fails with
+`UNIQUE constraint failed: index 'session_one_open'`. Ended rows are not in
+the index. A plain unique index on `ended_at` would not work, because NULLs
+are all different in a unique index. Before it builds the index, the
+migration ends every open session but the newest, at its own start time.
+Their people stay.
+
+**Session and person ids are never given twice.** Without `AUTOINCREMENT`,
+SQLite gives a new row the largest id in its table plus one, so forgetting
+the newest session would hand its id to the next one. Adding
+`AUTOINCREMENT` means rebuilding `session` and `person`, which the warning
+above rules out. So a new table, `last_id`, holds the largest id ever given
+in each, and two triggers keep it up to date on every insert. The node
+gives a new session or person `last_id + 1`. No table is rebuilt, so
+`migrate()` needs no change.
+
+`test_migration_0003_closes_all_but_the_newest_open_session` builds a
+database at version 2 with three open sessions, migrates it, and checks
+that only the newest is still open, that every person stays, and that
+`last_id` starts at the largest ids. `test_only_one_session_can_be_open`
+and `test_last_id_keeps_the_largest_id_ever_given` check the index and the
+triggers.

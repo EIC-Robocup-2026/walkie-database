@@ -24,7 +24,8 @@ change for this. What is new is a seed for the sim world and a rule for
 restoring it.
 
 walkie-agent-ros calls the harvest's first version v0, and this page plans
-for it. Object memory is not built yet, so in v0 nothing writes to the
+for it. Object memory is not built yet, and in the sim the agent keeps
+people in its own in-memory people memory. So in v0 nothing writes to the
 database during an episode.
 
 ## Summary
@@ -42,9 +43,13 @@ database during an episode.
   sees another's memory
   ([ADR-0016](decisions/0016-sim-snapshot-per-episode.md)).
 - **Generated tools only read memory.** At every access level, they reach
-  memory only through `find_objects`. This holds because the node has no
-  service that writes. The first such service must go on walkie-agent-ros's
-  never-list in the same change.
+  memory only through `find_objects`. This holds while `start_session`,
+  `end_session`, `remember_person`, `match_faces` and `match_appearances`
+  are on walkie-agent-ros's never-list at every level. Only the agent's
+  planned people memory client is to call them. That never-list does not
+  exist yet, so
+  Unrestricted harvest runs must not start until it names them
+  ([How the self-evolving agent reaches memory](#how-the-self-evolving-agent-reaches-memory)).
 - **Later, each with its own decision:** a rooms query, detections from
   oracle perception or walkie-vision, and `classes` read as negative
   evidence.
@@ -259,18 +264,25 @@ only on a marked sim host.
 | ----- | ----------------------------------- | ------------- |
 | Competition | Only through the `find_objects` atomic (`ctx.tools.find_objects`). It has no direct ROS access. | No |
 | Standard | The atomic, or a direct call to `/walkie_database/find_objects`, which is on the read-only call allow-list. It cannot publish. | No |
-| Unrestricted | The atomic, or a call to any service that is not on the never-list. It may publish only if harvest evidence calls for it (walkie-agent-ros's phase 4b), and then only base commands (`Twist`, `TwistStamped`). | Not today, because the node has no service that writes |
+| Unrestricted | The atomic, or a call to any service that is not on the never-list. It may publish only if harvest evidence calls for it (walkie-agent-ros's phase 4b), and then only base commands (`Twist`, `TwistStamped`). | No, while the people and session services are on the never-list |
 
-So "generated tools never write to the database" holds today only because
-of what the node offers. The node's parameters are covered already:
-`*/set_parameters` and `*/set_parameters_atomically` are on every level's
-never-list, so generated code cannot change `map_id`, which the node reads
-on every request. The never-list in walkie-agent-ros's planned
-`config/access_levels.toml` names nothing else from this node. When the
-node gets its first service that writes or deletes, such as a session
-service ([ADR-0010](decisions/0010-session-owns-people-and-conversations.md))
-or a reset, the same change must add it to that never-list. Otherwise
-Unrestricted code could call it. The node subscribes to no topic today.
+So "generated tools never write to the database" holds only while the
+never-list names every service of the node that writes or returns people.
+The node's parameters are covered already: `*/set_parameters` and
+`*/set_parameters_atomically` are on every level's never-list, so generated
+code cannot change `map_id`, which the node reads on every request.
+
+The node now serves five people and session services
+([ADR-0017](decisions/0017-one-open-session.md)): `start_session`,
+`end_session`, `remember_person`, `match_faces` and `match_appearances`.
+The first three write or delete people. The two match services write
+nothing, but they return people, with their names and facts, so they are on
+the never-list too. walkie-agent-ros's planned `config/access_levels.toml`
+does not exist yet. The walkie-agent-ros change that adds the people memory
+client must create it with these five services at every level, and a test
+there must check that. Until then, Unrestricted harvest runs must not
+start, because Unrestricted code could call any of them. The node
+subscribes to no topic today.
 Topics it may subscribe to later, such as detections, stay covered while
 Unrestricted publishing is limited to base commands.
 
@@ -285,7 +297,8 @@ decision when it comes.
 
 ### A rooms query
 
-The node serves only `FindObjects`. Until it serves rooms, the agent
+The node serves `FindObjects` and the people and session services, but
+nothing about rooms. Until it serves rooms, the agent
 answers room questions with its existing `list_locations` tool.
 walkie-agent-ros has no separate rooms tool.
 
@@ -383,8 +396,13 @@ robot's location. On the robot it is designed to hold people, faces,
 appearances and conversations. Guests belong to a session and are deleted
 with it, while permanent people are kept
 ([ADR-0010](decisions/0010-session-owns-people-and-conversations.md)).
-Today the node has no service or topic that writes them. The harvest keeps
-all of that out:
+The node's session and people services write them. Only the agent's
+planned people memory client is to call them, and they must be on the
+never-list
+([How the self-evolving agent reaches memory](#how-the-self-evolving-agent-reaches-memory)).
+In the sim the agent uses its in-memory people memory, so episode files
+keep no people.
+The harvest keeps all of that out:
 
 - **The seed is synthetic.** It is built only from config and world files,
   and its people, face, conversation and message tables are empty. A test
@@ -401,7 +419,9 @@ all of that out:
   the run folder with the traces, and share its lifetime, which
   walkie-agent-ros sets. In the first version they hold only the seed.
 - **What generated tools see is objects only.** `find_objects` returns
-  objects, never people. At Competition, a tool that uses the web may
+  objects, never people. `match_faces` and `match_appearances` return
+  people, so they go on the never-list with the services that write
+  people. At Competition, a tool that uses the web may
   otherwise only speak, play sounds, tell the time or date and wait, so it
   cannot also read memory. The agent's coder never sees person records.
 - **The task agent is the one exception.** It holds memory and may search

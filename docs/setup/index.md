@@ -14,3 +14,4 @@ steps in your own project, or when you add a new kind of memory.
 | [6. Add sample data and a browser](06-sample-data-and-browser.md)   | Fills a demo file, and shows any database in a web browser        |
 | [7. Use the Zenoh middleware](07-zenoh.md)                          | Puts every `pixi run` on Zenoh, like walkie-ros and the robot     |
 | [8. Add the message package](08-message-package.md)                 | Builds the node's own message types, and its first service        |
+| [9. Add the people and session services](09-people-services.md)     | Lets the agent remember and recognise people, one session at a time |
