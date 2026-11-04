@@ -8,7 +8,18 @@ import pytest
 
 from walkie_database.db import connect, transaction
 from walkie_database.migrate import Migration, load_migrations, migrate, schema_version
+from walkie_database.object_context import (
+    add_event,
+    add_surface,
+    find_events,
+    relations,
+    room_at,
+    room_by_key,
+    room_outline,
+    set_relation,
+)
 from walkie_database.objects import object_id_highwater, reserve_object_ids
+from walkie_database.people import end_session
 
 # Longer than 12 bytes, so that vec0 keeps it outside its fixed metadata slot.
 MAP_ID = "chula-pat14-6-2026-11-05-abcd1234"
@@ -393,3 +404,136 @@ def test_0005_that_fails_is_also_undone_after_a_restart(tmp_path, v3):
     assert {row[0]: row[1] for row in reopened.execute(
         "SELECT object_id, embedding FROM object_clip_vit_b16")} == vectors()
     reopened.close()
+
+
+# Migration 0006 --------------------------------------------------------------
+
+CONTEXT_TABLES = ("surface", "object_catalogue", "catalogue_alias", "object_relation", "object_event",
+                  "event", "write_request")
+
+
+def test_0006_keeps_every_old_row_and_only_adds_columns_at_the_end(v3):
+    upgraded(v3, 5)
+    old = table_rows(v3)
+    upgraded(v3, 6)
+    new = table_rows(v3)
+    for table, rows in old.items():
+        width = len(rows[0]) if rows else 0
+        assert [row[:width] for row in new[table]] == rows, table
+
+
+def test_0006_starts_with_no_keys_links_or_new_rows(v3):
+    upgraded(v3, 6)
+    assert [tuple(row) for row in v3.execute("SELECT name, key FROM room ORDER BY id")] == [
+        ("kitchen", None), ("living room", None),
+    ]
+    assert v3.execute(
+        "SELECT count(*) FROM object WHERE enclosed != 0 OR catalogue_id IS NOT NULL"
+    ).fetchone()[0] == 0
+    for table in CONTEXT_TABLES:
+        assert v3.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
+
+
+def test_0006_leaves_old_room_outlines_and_vectors_working(v3):
+    upgraded(v3, 6)
+    assert room_at(v3, MAP_ID, 1, 1) == 1
+    assert room_at(v3, MAP_ID, 6, 1) == 2
+    assert room_outline(v3, 2) == [[4, 0], [8, 0], [8, 4], [4, 4]]
+    assert {row[0]: row[1] for row in vector_rows(v3)} == vectors()
+
+
+def test_0006_lets_old_rows_take_keys_surfaces_relations_and_events(v3):
+    upgraded(v3, 6)
+    with transaction(v3):
+        v3.execute("UPDATE room SET key = 'living_room' WHERE name = 'living room'")
+        surface_id = add_surface(v3, TABLE, "table_top", 0.8, [[0, 0], [1, 0], [1, 1]])
+        set_relation(v3, CUP, TABLE, "on", 0.5, 10.0, surface_id=surface_id)
+        add_event(v3, MAP_ID, "note", "cup on table", 11.0, object_id=CUP, room_id=1)
+    assert room_by_key(v3, MAP_ID, "living_room")["id"] == 2
+    assert [row["surface_key"] for row in relations(v3, src_id=CUP)] == ["table_top"]
+    assert find_events(v3, MAP_ID, text="cup")[0][0]["object_id"] == CUP
+
+
+def test_0006_forgets_the_events_of_a_session_that_is_older_than_it(v3):
+    upgraded(v3, 6)
+    with transaction(v3):
+        add_event(v3, MAP_ID, "note", "guest waved", 11.0, person_id=2, session_id=3)
+        add_event(v3, MAP_ID, "note", "robot moved", 12.0, session_id=3)
+    assert end_session(v3, 3) == (3, 1)
+    assert [row["text"] for row in find_events(v3, MAP_ID)[0]] == ["robot moved"]
+    assert find_events(v3, MAP_ID, text="waved") == ([], False)
+    assert v3.execute("SELECT session_id FROM event").fetchone()[0] is None
+    # Forgetting keeps its other effects on old rows.
+    assert v3.execute("SELECT session_id FROM object_observation").fetchone()[0] is None
+    assert v3.execute("SELECT count(*) FROM person").fetchone()[0] == 0
+
+
+def test_0006_twice_changes_nothing(tmp_path, v3):
+    upgraded(v3, 6)
+    with transaction(v3):
+        add_event(v3, MAP_ID, "note", "robot moved", 12.0)
+    before = snapshot(v3)
+    upgraded(v3, 6)
+    assert snapshot(v3) == before
+    v3.close()
+    reopened = connect(tmp_path / "walkie.db")
+    upgraded(reopened, 6)
+    assert snapshot(reopened) == before
+    reopened.close()
+
+
+def test_0006_that_fails_at_the_end_rolls_everything_back(tmp_path, v3):
+    upgraded(v3, 5)
+    before = snapshot(v3)
+    migrations = load_migrations()
+
+    with pytest.raises(sqlite3.OperationalError, match="no_such_table"):
+        migrate(v3, [*migrations[:5], failing_copy(tmp_path, migrations[5])])
+
+    assert schema_version(v3) == 5
+    assert snapshot(v3) == before
+    assert not v3.in_transaction
+    names = {row[0] for row in v3.execute("SELECT name FROM sqlite_master")}
+    assert names.isdisjoint({*CONTEXT_TABLES, "event_fts", "event_fts_data",
+                             "session_forget_events", "object_relation_check", "room_map_key"})
+    with pytest.raises(sqlite3.OperationalError, match="key"):
+        v3.execute("SELECT key FROM room")
+
+    # A session still goes as it did at schema 5.
+    assert end_session(v3, 3) == (3, 1)
+
+    # The real migration still runs afterwards.
+    upgraded(v3, 6)
+    with transaction(v3):
+        event_id = add_event(v3, MAP_ID, "note", "robot moved", 12.0)
+    assert [row["id"] for row in find_events(v3, MAP_ID, text="moved")[0]] == [event_id]
+
+
+def test_0006_that_fails_is_also_undone_after_a_restart(tmp_path, v3):
+    upgraded(v3, 5)
+    before = snapshot(v3)
+    migrations = load_migrations()
+    with pytest.raises(sqlite3.OperationalError):
+        migrate(v3, [*migrations[:5], failing_copy(tmp_path, migrations[5])])
+    v3.close()
+    reopened = connect(tmp_path / "walkie.db")
+    assert snapshot(reopened) == before
+    reopened.close()
+
+
+@pytest.mark.parametrize("version", [4, 5, 6])
+def test_an_upgrade_and_a_new_database_end_with_the_same_schema(v3, version):
+    upgraded(v3, version)
+    fresh = connect(":memory:")
+    upgraded(fresh, version)
+    assert snapshot(v3)[0] == snapshot(fresh)[0]
+    fresh.close()
+
+
+def test_an_upgrade_from_3_to_the_newest_schema_runs_in_one_go(tmp_path, v3):
+    assert migrate(v3) == len(load_migrations())
+    assert {row[0]: row[1] for row in vector_rows(v3)} == vectors()
+    assert object_id_highwater(v3) == FAR_LAMP
+    v3.execute("INSERT INTO event_fts (event_fts, rank) VALUES ('integrity-check', 1)")
+    assert v3.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert v3.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

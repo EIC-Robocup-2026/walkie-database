@@ -32,6 +32,12 @@ OBJECT = "object"  # the kind of a vector table, as in object_clip_vit_b16
 MAX_SEARCH_RESULTS = 4096  # the largest k sqlite-vec takes
 
 
+def require_transaction(conn: sqlite3.Connection, helper: str) -> None:
+    """Refuse a helper that must commit together with the caller's other writes."""
+    if not conn.in_transaction:
+        raise Refused(f"{helper} runs inside the caller's transaction.")
+
+
 @dataclass(frozen=True)
 class IdReservation:
     """A block of object ids, already committed, from *first* to *last*.
@@ -186,8 +192,7 @@ def insert_object(
     or be one of *retained_ids*, the anchors a seed keeps across runs. A test
     fixture that needs fixed ids writes SQL into a fresh store instead.
     """
-    if not conn.in_transaction:
-        raise Refused("insert_object runs inside the caller's transaction.")
+    require_transaction(conn, "insert_object")
     if new.box is not None:
         _check_box(new.box)
     _claim_new_id(conn, object_id, reservation, retained_ids)
@@ -255,8 +260,7 @@ def tombstone_object(
     transaction. The row stays, so that a client holding the id still gets an
     answer about it.
     """
-    if not conn.in_transaction:
-        raise Refused("tombstone_object runs inside the caller's transaction.")
+    require_transaction(conn, "tombstone_object")
     row = conn.execute("SELECT state FROM object WHERE id = ?", (object_id,)).fetchone()
     if row is None:
         raise Refused(f"Object {object_id} does not exist.")
@@ -272,8 +276,7 @@ def tombstone_object(
 
 def set_split_from(conn: sqlite3.Connection, object_id: int, parent_id: int) -> None:
     """Record that *object_id* was split from *parent_id*, inside the caller's transaction."""
-    if not conn.in_transaction:
-        raise Refused("set_split_from runs inside the caller's transaction.")
+    require_transaction(conn, "set_split_from")
     _check_link(conn, SPLIT_FROM, object_id, parent_id)
     conn.execute(
         "UPDATE object SET split_from = ?, revision = revision + 1 WHERE id = ?",
@@ -303,8 +306,7 @@ def write_object_vector(
     half a row behind. The metadata comes from the object row. Later changes to
     that row reach the vector through the migration's triggers.
     """
-    if not conn.in_transaction:
-        raise Refused("write_object_vector runs inside the caller's transaction.")
+    require_transaction(conn, "write_object_vector")
     row = conn.execute(
         "SELECT map_id, coalesce(room_id, 0), state, layer FROM object WHERE id = ?", (object_id,)
     ).fetchone()

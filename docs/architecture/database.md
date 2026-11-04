@@ -51,6 +51,12 @@ them by meaning, by position and by words.
 - **Object ids are never given twice.** An id is reserved in a committed
   transaction before anyone sees it, and a merged or discarded object keeps its
   row as a tombstone ([Object ids and tombstones](#object-ids-and-tombstones)).
+- **Only `on` and `inside` are stored.** Rooms, surfaces, the catalogue and those
+  two relations are rows. `near` and `in_room` are computed when asked
+  ([ADR-0021](decisions/0021-rooms-and-object-queries.md)).
+- **The task's log forgets with the session.** A line that names a person goes
+  with that person's session, and is not left with an empty link
+  ([ADR-0022](decisions/0022-task-event-log.md)).
 
 ## The parts
 
@@ -183,7 +189,8 @@ the sample house.
 
 A session is one run of a task, such as one Receptionist attempt. The
 people met in it are forgotten with it
-([ADR-0010](decisions/0010-session-owns-people-and-conversations.md)). The
+([ADR-0010](decisions/0010-session-owns-people-and-conversations.md)), and so
+are the lines of [the task's log](#the-tasks-log) that name them. The
 open session is the `session` row whose `ended_at` is NULL, and at most one
 is open. The node keeps nothing about it in memory: it is all in the file
 ([ADR-0017](decisions/0017-one-open-session.md)).
@@ -462,6 +469,20 @@ erDiagram
   object ||--o| object_cloud : "merged points"
   object ||--o{ object_label : "called"
   object ||--o{ object_observation : "seen as"
+  map ||--o{ surface : "contains"
+  object ||--o{ surface : "anchor of"
+  map ||--o{ object_catalogue : "knows"
+  object_catalogue ||--o{ catalogue_alias : "also called"
+  object_catalogue |o--o{ object : "describes (set to none)"
+  object ||--o{ object_relation : "source of"
+  object ||--o{ object_relation : "anchor of"
+  surface |o--o{ object_relation : "holds"
+  object ||--o{ object_event : "changed state"
+  map ||--o{ event : "logged on"
+  room |o--o{ event : "in (set to none)"
+  object |o--o{ event : "about (set to none)"
+  person |o--o{ event : "names (see the task's log)"
+  session |o--o{ event : "during (see the task's log)"
   session |o--o{ object_observation : "during (set to none)"
   session |o--o{ person : "met"
   session |o--o{ appearance : "worn during"
@@ -478,11 +499,18 @@ erDiagram
 | `store_meta`         | The identity of the active run, in one row                                | `store_id`, `clock_kind` and `map_id`. `refresh_anchors_pending` is 1 when the anchors need seeding again. A map named here cannot be deleted. Nothing writes this table yet. |
 | `session`            | One run of a task, for example one Receptionist attempt                   | At most one is open (`ended_at` NULL): the session the agent is in. Migration 0003's `session_one_open` index refuses a second. |
 | `last_id`            | The largest id ever given in `session`, in `person` and in `object`       | The node gives a new session or person the next id, so no id is given twice. Object ids are reserved from it in blocks ([Object ids and tombstones](#object-ids-and-tombstones)). Triggers keep it up to date. |
-| `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room                       |
+| `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room. `name` is for display and `key` for requests ([Rooms, surfaces and relations](#rooms-surfaces-and-relations)). |
 | `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand). See [Object fields](#object-fields). |
 | `object_cloud`       | The merged point cloud of one object                                      | Its own table, so reading `object` never loads the points                      |
 | `object_label`       | One name a detector gave an object, and how many times                    | Starts empty. `object.label` stays the name in use.                            |
 | `object_observation` | One detection of an object                                                | No points, masks or full images ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)). `view_score`, the camera pose and `color_shares` are the evidence for its crop. |
+| `surface`            | One horizontal place on an anchor, such as `shelf_2`                      | `key` is unique in its map. `geometry_valid` is 0 until it is measured.         |
+| `object_catalogue`   | One known item of a map                                                   | `weight_g` is where an object's weight comes from. `object.catalogue_id` links to it. |
+| `catalogue_alias`    | One other name for a catalogue item                                       | Stored without case or extra spaces. Several items may share one.               |
+| `object_relation`    | One stored `on` or `inside` fact                                          | An `on` row names a surface. An `inside` row names only the anchor.             |
+| `object_event`       | One state change of an object                                             | The audit trail. Not the same as `event`.                                       |
+| `event`              | One line of the task's log                                                | [The task's log](#the-tasks-log)                                                |
+| `write_request`      | The outcome of one write with a request id                                | [Retried writes](#retried-writes)                                               |
 | `person`             | One person. `session_id` is NULL for people kept across sessions          | `attributes` is JSON, for example `{"drink": "coke"}`                           |
 | `face`               | One face sample of a person                                               | A person has several, from different angles                                     |
 | `appearance`         | Clothing and body, for when the face is not visible                       | Belongs to one session, because clothes change                                  |
@@ -516,6 +544,8 @@ most of them keep their defaults.
 | `merged_into`, `split_from`           | None        | Links to the object that took over, or the one this came from. Set to none when that object is deleted. |
 | `gripper_frame`                       | None        | Reserved for a held object                                                   |
 | `expected_pose`, `expected_surface_key` | None      | Reserved for a planned place                                                 |
+| `enclosed`                            | 0           | 1 for an anchor that can hold things inside, such as a fridge. Migration 0006. |
+| `catalogue_id`                        | None        | The `object_catalogue` item it is. Set to none when the item is deleted. Migration 0006. |
 
 An upgrade treats old rows carefully. An object with `source = 'map'` becomes an
 `anchor` that is `present`, with `p_exist` at 0.95. Every other old object stays a
@@ -549,6 +579,65 @@ across a restart, so giving one twice would point a client at the wrong object.
 
 Nothing calls these from the node yet.
 
+### Rooms, surfaces and relations
+
+`src/walkie_database/object_context.py` holds the helpers for these tables. They
+record what a caller states, and nothing infers a relation yet
+([ADR-0021](decisions/0021-rooms-and-object-queries.md)).
+
+A room has two names. `key`, such as `living_room`, is what a request uses.
+`name`, such as `living room`, is what a person reads. `room_by_key` matches only
+the key, and nothing turns one into the other. `room_at` finds the room of a point,
+and a room that holds the point strictly inside beats one whose wall it is on.
+
+| Stored fact                           | Row                                                    | What it needs |
+| ------------------------------------- | ------------------------------------------------------ | ------------- |
+| The cup is on shelf 2 of the bookcase | `predicate = 'on'`, `dst_id` the bookcase, `surface_id` | A measured surface of a measured anchor on the same map |
+| The cup is inside the fridge          | `predicate = 'inside'`, `dst_id` the fridge, no surface | A measured anchor on the same map with `enclosed = 1`   |
+
+`near` and `in_room` are not stored, so they cannot go stale. The object services
+will compute them from `object_box` and the room when asked.
+
+Deleting an anchor deletes its surfaces and every relation to it. Deleting a surface
+deletes the relations through it. An anchor that loses its measured box, or becomes a
+tombstone, keeps its rows, but `usable_surfaces` and `relations` stop returning them.
+
+### The task's log
+
+`event` is the log of what the task did, one line at a time. `add_event` checks the
+kind (`action`, `note`, `error` or `handover`), the 512-character limit, and that a
+room or object is on the event's map. `find_events` searches by map, words, time and
+room, newest first ([ADR-0022](decisions/0022-task-event-log.md)).
+
+A line must not contain personal details. The database can check its length and
+structure, and it cannot read its meaning.
+
+| When this row is deleted | What happens to its events                                       |
+| ------------------------ | ------------------------------------------------------------------ |
+| A session                | Events that name a person and either that session or a guest of that session are deleted. The other events of the session stay, with no session. |
+| A person, alone          | The event stays, with no person. Nothing does this today: people go with their session. |
+| A room or an object      | The event stays, with no room or no object.                        |
+| A map                    | The events are deleted.                                            |
+
+The trigger `session_forget_events` runs before the session row goes. A foreign key
+alone would set `person_id` to NULL and keep the text. Deleted lines also leave
+`event_fts`, but their words may remain in the file's free pages until a `VACUUM`.
+
+### Retried writes
+
+A request that carries a `request_id` may arrive twice, after a lost reply.
+`record_write` stores the outcome in the same transaction as the write, and a retry
+gets that outcome back. `find_write` looks one up first. The same id with another
+operation or another payload raises `WriteConflict`.
+
+`write_request` holds a hash of the payload and a small JSON outcome. It never holds
+an image, a crop or an embedding, and the size limits refuse them. The outcome holds
+ids and statuses only, because forgetting a session does not touch this table.
+
+The table lives as long as the store. A node restart or a new `store_id` keeps it.
+The offline seed restore is to clear it, and is not built yet. Nothing calls these
+helpers from the node yet.
+
 ### The search indexes
 
 Each index is a virtual table whose rows have the same id as the row they
@@ -564,6 +653,7 @@ cannot have foreign keys, so triggers delete index rows with their owner.
 | `face_arcface_w600k_r50`       | `vec0`    | `face`       | Whose face is this?                             |
 | `appearance_osnet_x1_0_msmt17` | `vec0`    | `appearance` | Who is wearing these clothes?                   |
 | `message_fts`                  | `fts5`    | `message`    | Which messages mention a drink?                 |
+| `event_fts`                    | `fts5`    | `event`      | Which log lines mention the fridge?             |
 
 A caller picks a vector table by its name, and the database checks only the
 name and the length of the vector
@@ -837,6 +927,7 @@ runs the module on Python 3.12.
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |
 | Connection settings               | `src/walkie_database/db.py`                 | Yes    |
 | Object ids, rows and tombstones   | `src/walkie_database/objects.py`            | Yes    |
+| Rooms, surfaces, the catalogue, relations, the log and retried writes | `src/walkie_database/object_context.py` | Yes |
 | The map identity helper           | `src/walkie_map_id.py`                      | Yes    |
 | The node's messages and services  | `ros2_ws/src/walkie_database_msgs/`         | Yes    |
 | The walkie-vision commit they nest | `ros2_ws.repos`                            | Yes    |
@@ -923,3 +1014,11 @@ The sim harvest decision, ADR-0016, is on the
 ??? success "ADR-0020: Identify a map by its pixels and metadata, and keep seed lineage · Accepted"
 
     --8<-- "architecture/decisions/0020-map-identity-and-seed-lineage.md:body"
+
+??? note "ADR-0021: Store rooms, surfaces and the catalogue as rows, and compute near and in_room · Proposed"
+
+    --8<-- "architecture/decisions/0021-rooms-and-object-queries.md:body"
+
+??? note "ADR-0022: Keep a task log, and forget its person-linked lines with the session · Proposed"
+
+    --8<-- "architecture/decisions/0022-task-event-log.md:body"

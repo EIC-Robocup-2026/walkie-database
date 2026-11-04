@@ -179,8 +179,8 @@ session, then open <http://127.0.0.1:8001> on the laptop.
     At a competition, anyone on the arena Wi-Fi could read every guest's
     name and conversation.
 
-!!! note "Why `demo.db` is 8.5 MB"
+!!! note "Why `demo.db` is about 9 MB"
     Most of it is empty space. Each vector table reserves room for 1,024
     vectors (about 2 MB for 512 numbers each) as soon as it has its first
     row. The sample has four vector tables with rows, so 8 MB is reserved
-    space. Everything else, point clouds included, is about 0.5 MB.
+    space. Everything else, point clouds included, is about 1 MB.

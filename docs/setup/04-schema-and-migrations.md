@@ -24,12 +24,15 @@ file is missing.
 | `src/walkie_database/migrations/0003_one_open_session_and_unique_ids.sql` | Allows at most one open session, and keeps session and person ids from being given twice ([below](#migration-0003-one-open-session)) |
 | `src/walkie_database/migrations/0004_object_lifecycle.sql` | Adds the object lifecycle fields, run identity and an object id counter ([below](#migration-0004-object-lifecycle-fields)) |
 | `src/walkie_database/migrations/0005_object_vector_filters.sql` | Adds state and layer to the object vector table's metadata ([below](#migration-0005-object-vector-filters)) |
+| `src/walkie_database/migrations/0006_object_context.sql` | Adds room keys, surfaces, the catalogue, relations, the task's log and retried writes ([below](#migration-0006-object-context)) |
 | `src/walkie_database/migrate.py`             | Finds the migrations and applies the missing ones |
 | `src/walkie_database/objects.py`             | Reserves object ids, writes new object rows, tombstones and vectors, and searches vectors |
+| `src/walkie_database/object_context.py`      | Records and reads what migration 0006 adds       |
 | `tests/test_migrate.py`                      | Tests for applying, refusing and rolling back    |
 | `tests/test_schema.py`                       | Tests for what each table and index promises     |
 | `tests/test_migration_upgrades.py`           | Tests that upgrade a populated database from version 3 |
 | `tests/test_objects.py`                      | Tests for object ids, new rows and tombstones    |
+| `tests/test_object_context.py`               | Tests for rooms, surfaces, relations, the log, forgetting and retried writes |
 
 The tables themselves are explained in
 [The Database](../architecture/database.md).
@@ -282,3 +285,33 @@ statement, and checks that the old table, its triggers and its rows all still wo
 on the same connection and after a restart. `tests/test_objects.py` checks that a
 near-copy of the query in the wrong room, map, state or layer cannot hide the
 object asked for, and that each change to a row reaches its vector.
+
+## Migration 0006: object context
+
+Added on 2026-11-05. `0006_object_context.sql` adds what the object services will
+read, and no logic that fills it. It adds `room.key`, `object.enclosed` and
+`object.catalogue_id` with `ALTER TABLE ... ADD COLUMN`, so old rows keep their values
+and the new columns stay empty. Every other change is a new table
+([Rooms, surfaces and relations](../architecture/database.md#rooms-surfaces-and-relations),
+[The task's log](../architecture/database.md#the-tasks-log)).
+
+**Why triggers check relations.** A `CHECK` cannot read another row, so triggers
+check that a relation stays on one map and that its surface belongs to its anchor.
+`ALTER TABLE ... ADD COLUMN` can add a `REFERENCES` only when the default is NULL,
+which is why `catalogue_id` has none.
+
+**Why `session_forget_events` runs before the delete.** Foreign key actions run after
+the `session` row is deleted. By then a person's row is gone and `person_id` is NULL,
+so the event can no longer be told apart from one that named nobody. A `BEFORE DELETE`
+trigger still sees the links, and it deletes those events first.
+
+!!! warning "Never pass a caller's text to `MATCH`"
+    `cup OR plate` is query syntax there, and a stray `"` is an error. `find_events`
+    quotes each word for this reason.
+
+`tests/test_migration_upgrades.py` upgrades a populated database, and runs a copy of
+the migration that fails at its last statement, on the same connection and after a
+restart. It also checks that an upgraded database and a new one end with the same
+schema. `tests/test_object_context.py` covers the cascades, the relation rules, the
+word index after an insert, an update and a delete, and what forgetting a session
+takes with it, including a test that shows the foreign key alone would keep the text.
