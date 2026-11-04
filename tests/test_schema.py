@@ -47,7 +47,8 @@ def add_object(db, object_id, label, center, embedding, room_id=None, map_id="m1
         (object_id, x - half, x + half, y - half, y + half, z - half, z + half),
     )
     db.execute(
-        "INSERT INTO object_clip_vit_b16 VALUES (?, ?, ?, ?)",
+        """INSERT INTO object_clip_vit_b16 (object_id, embedding, map_id, room_id, state, layer)
+           VALUES (?, ?, ?, ?, 'candidate', 'movable')""",
         (object_id, embedding, map_id, room_id or 0),
     )
 

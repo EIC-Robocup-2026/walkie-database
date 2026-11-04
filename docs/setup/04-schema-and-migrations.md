@@ -23,8 +23,9 @@ file is missing.
 | `src/walkie_database/migrations/0002_name_vector_tables_by_weights.sql` | Renames the face and appearance vector tables after their weights ([below](#migration-0002-the-weights-in-the-name)) |
 | `src/walkie_database/migrations/0003_one_open_session_and_unique_ids.sql` | Allows at most one open session, and keeps session and person ids from being given twice ([below](#migration-0003-one-open-session)) |
 | `src/walkie_database/migrations/0004_object_lifecycle.sql` | Adds the object lifecycle fields, run identity and an object id counter ([below](#migration-0004-object-lifecycle-fields)) |
+| `src/walkie_database/migrations/0005_object_vector_filters.sql` | Adds state and layer to the object vector table's metadata ([below](#migration-0005-object-vector-filters)) |
 | `src/walkie_database/migrate.py`             | Finds the migrations and applies the missing ones |
-| `src/walkie_database/objects.py`             | Reserves object ids, and writes new object rows and tombstones |
+| `src/walkie_database/objects.py`             | Reserves object ids, writes new object rows, tombstones and vectors, and searches vectors |
 | `tests/test_migrate.py`                      | Tests for applying, refusing and rolling back    |
 | `tests/test_schema.py`                       | Tests for what each table and index promises     |
 | `tests/test_migration_upgrades.py`           | Tests that upgrade a populated database from version 3 |
@@ -88,6 +89,8 @@ PRAGMA user_version = 1;    -- set it
   network.
 - **No `NULL` in vector-table metadata.** sqlite-vec rejects it, so `0` means
   "none": an object in no room has `room_id = 0` in `object_clip_vit_b16`.
+- **Name the columns in every insert into a vector table.** A migration can add
+  metadata columns, and an insert by position then fails.
 
 ## Add a migration
 
@@ -248,3 +251,34 @@ runs the migration twice, and runs a copy that fails at its last statement, whic
 must leave version 3 unchanged. `tests/test_objects.py` checks the order of the
 reservation's `PRAGMA` and `COMMIT`, and that an id is not given again after a
 delete, a restart or an unused reservation.
+
+## Migration 0005: object vector filters
+
+Added on 2026-11-05. A search must filter by state and layer before it ranks,
+or a similar object that is gone can take the place of the one you asked for.
+vec0 filters only on its own metadata columns, and sqlite-vec 0.1 cannot add one.
+So `0005_object_vector_filters.sql` rebuilds `object_clip_vit_b16`:
+
+1. Copy every vector into a temporary ordinary table.
+2. Drop `object_delete`, `object_room_update` and the `vec0` table. Dropping a
+   table does not drop a trigger that writes to it.
+3. Create the `vec0` table again, under the same name, with `state` and `layer`.
+4. Put each vector back with the metadata of its `object` row, and drop the
+   temporary table.
+5. Create the triggers again, and add `object_state_layer_update` and
+   `object_map_fixed`.
+
+It never renames a `vec0` table or touches its shadow tables. A vector with no
+`object` row is left behind, as in migration 0002. The vector bytes do not change.
+`room_clip_vit_b16` is not touched.
+
+!!! warning "A positional insert stops working"
+    `INSERT INTO object_clip_vit_b16 VALUES (?, ?, ?, ?)` now fails, because the
+    table has six columns. Every insert in this repository names its columns.
+
+`tests/test_migration_upgrades.py` upgrades a populated database and compares the
+vector bytes. It also runs a copy of the migration that fails at its last
+statement, and checks that the old table, its triggers and its rows all still work
+on the same connection and after a restart. `tests/test_objects.py` checks that a
+near-copy of the query in the wrong room, map, state or layer cannot hide the
+object asked for, and that each change to a row reaches its vector.

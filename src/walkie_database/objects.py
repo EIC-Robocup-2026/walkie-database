@@ -1,4 +1,4 @@
-"""Object ids, new object rows and tombstones.
+"""Object ids, new object rows, tombstones and object vectors.
 
 Everything here takes a plain :class:`sqlite3.Connection`, as
 :func:`walkie_database.db.connect` opens it, and plain Python values, so the
@@ -8,21 +8,28 @@ reads a detection.
 An object id is durable. It is reserved in a committed transaction before
 anyone sees it, and it is never given again, also after a delete, a restart or
 a crash. A crash can leave gaps. That is the cost, and it is harmless.
+
+A vector names its model, and the model is looked up in the schema, as for
+people (ADR-0007). An object's vector carries the map, room, state and layer of
+its row, so that a search filters on them before it ranks.
 """
 
 from __future__ import annotations
 
 import math
 import sqlite3
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from walkie_database.db import transaction
-from walkie_database.people import Refused
+from walkie_database.people import Refused, unit_vector, vector_tables
 
 MAX_LINK_HOPS = 32  # the most links followed from one object
 MERGED_INTO, SPLIT_FROM = "merged_into", "split_from"
 _TOMBSTONE_STATES = ("discarded", "merged")
+OBJECT = "object"  # the kind of a vector table, as in object_clip_vit_b16
+MAX_SEARCH_RESULTS = 4096  # the largest k sqlite-vec takes
 
 
 @dataclass(frozen=True)
@@ -272,3 +279,87 @@ def set_split_from(conn: sqlite3.Connection, object_id: int, parent_id: int) -> 
         "UPDATE object SET split_from = ?, revision = revision + 1 WHERE id = ?",
         (parent_id, object_id),
     )
+
+
+def _object_vector(
+    conn: sqlite3.Connection, model: str, values: Sequence[float], where: str
+) -> tuple[str, bytes]:
+    """The vector table of *model*, and *values* as the bytes it takes.
+
+    unit_vector refuses a model with no table in the schema, so the table name
+    is safe to put in SQL text.
+    """
+    tables = vector_tables(conn, OBJECT)
+    embedding = unit_vector(values, model=model, tables=tables, kind=OBJECT, where=where)
+    return f"{OBJECT}_{model}", embedding
+
+
+def write_object_vector(
+    conn: sqlite3.Connection, object_id: int, model: str, values: Sequence[float]
+) -> None:
+    """Store an object's vector for *model*, replacing any it has.
+
+    Runs inside the caller's transaction, because a failed vec0 write can leave
+    half a row behind. The metadata comes from the object row. Later changes to
+    that row reach the vector through the migration's triggers.
+    """
+    if not conn.in_transaction:
+        raise Refused("write_object_vector runs inside the caller's transaction.")
+    row = conn.execute(
+        "SELECT map_id, coalesce(room_id, 0), state, layer FROM object WHERE id = ?", (object_id,)
+    ).fetchone()
+    if row is None:
+        raise Refused(f"Object {object_id} does not exist.")
+    table, embedding = _object_vector(conn, model, values, f"The vector of object {object_id}")
+    # A vec0 table has no upsert.
+    conn.execute(f"DELETE FROM {table} WHERE object_id = ?", (object_id,))
+    conn.execute(
+        f"""INSERT INTO {table} (object_id, embedding, map_id, room_id, state, layer)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+        (object_id, embedding, *row),
+    )
+
+
+class VectorMatch(NamedTuple):
+    object_id: int
+    distance: float  # cosine distance: 0 is the same direction, 1 is unrelated
+
+
+def search_object_vectors(
+    conn: sqlite3.Connection,
+    model: str,
+    query: Sequence[float],
+    *,
+    map_id: str,
+    max_results: int = 10,
+    room_id: int | None = None,
+    states: Sequence[str] = (),
+    layers: Sequence[str] = (),
+) -> list[VectorMatch]:
+    """The objects nearest *query* among those that pass every filter, nearest first.
+
+    The filters run inside the vec0 search, so an object elsewhere cannot take a
+    place in the results, however similar it is. *map_id* is required, because
+    coordinates mean nothing across maps. A *room_id* of None means any room and
+    0 means no room. Empty *states* or *layers* mean any.
+    """
+    if not 1 <= max_results <= MAX_SEARCH_RESULTS:
+        raise Refused(f"max_results must be from 1 to {MAX_SEARCH_RESULTS}, not {max_results}.")
+    table, embedding = _object_vector(conn, model, query, "The query")
+    filters = "embedding MATCH ? AND k = ? AND map_id = ?"
+    parameters: list[object] = [embedding, max_results, map_id]
+    if room_id is not None:
+        filters += " AND room_id = ?"
+        parameters.append(room_id)
+    for column, values in (("state", states), ("layer", layers)):
+        if values:
+            marks = ", ".join("?" * len(values))
+            filters += f" AND {column} IN ({marks})"
+            parameters += values
+    # A vec0 search takes only ORDER BY distance. MATERIALIZED keeps SQLite from
+    # moving the outer ORDER BY into it, so ties can sort by id out here.
+    sql = f"""WITH matches AS MATERIALIZED (
+                  SELECT object_id, distance FROM {table} WHERE {filters}
+              )
+              SELECT object_id, distance FROM matches ORDER BY distance, object_id"""
+    return [VectorMatch(row[0], row[1]) for row in conn.execute(sql, parameters)]

@@ -147,13 +147,19 @@ def _box_surface(rng: np.random.Generator, obj: DemoObject) -> tuple[np.ndarray,
 def _add_object(conn, rng, obj, room_id, embedding, first_seen, last_seen, session):
     session_id, session_start = session
     sx, sy, sz = obj.size
+    # As migration 0004 reads an old row, except that the demo's movable objects
+    # are present: the demo shows what confirmed objects look like.
+    is_anchor = obj.source == "map"
+    layer, state = "anchor" if is_anchor else "movable", "present"
     object_id = conn.execute(
         """INSERT INTO object (map_id, room_id, label, caption, source,
                                center_x, center_y, center_z, size_x, size_y, size_z,
-                               qz, qw, n_detections, first_seen, last_seen)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                               qz, qw, n_detections, first_seen, last_seen,
+                               layer, state, p_exist)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (MAP_ID, room_id, obj.label, obj.caption, obj.source, *obj.center, sx, sy, sz,
-         math.sin(obj.yaw / 2), math.cos(obj.yaw / 2), obj.detections, first_seen, last_seen),
+         math.sin(obj.yaw / 2), math.cos(obj.yaw / 2), obj.detections, first_seen, last_seen,
+         layer, state, 0.95 if is_anchor else 0.5),
     ).lastrowid
 
     # The box aligned with the map's axes around the turned box.
@@ -165,8 +171,9 @@ def _add_object(conn, rng, obj, room_id, embedding, first_seen, last_seen, sessi
         (object_id, x - hx, x + hx, y - hy, y + hy, z - hz, z + hz),
     )
     conn.execute(
-        "INSERT INTO object_clip_vit_b16 (object_id, embedding, map_id, room_id) VALUES (?, ?, ?, ?)",
-        (object_id, embedding, MAP_ID, room_id),
+        """INSERT INTO object_clip_vit_b16 (object_id, embedding, map_id, room_id, state, layer)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (object_id, embedding, MAP_ID, room_id, state, layer),
     )
     if obj.source != "perception":
         return

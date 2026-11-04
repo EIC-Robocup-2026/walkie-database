@@ -580,6 +580,20 @@ Migration 0002 gave these two tables their names
 The CLIP tables, `room_clip_vit_b16` and `object_clip_vit_b16`, still name
 only the network.
 
+`object_clip_vit_b16` carries `map_id`, `room_id`, `state` and `layer` as
+metadata, so a search filters on them before it ranks. The filter decides which
+rows take part, so a near-copy of the query in the wrong room cannot take a place
+in the results. The values are never `NULL`: `room_id` is 0 for no room. They come
+from the `object` row, and triggers keep them in step when the row's room, state
+or layer changes, including the `SET NULL` from deleting a room. An object cannot
+move to another map: the `object_map_fixed` trigger refuses it, because its
+coordinates, room and vector all belong to the old one.
+
+`write_object_vector` and `search_object_vectors` in
+`src/walkie_database/objects.py` do this work. The first reads the metadata from
+the row, and scales the vector to length 1 as the people services do. The second
+needs a `map_id`, and takes any of a room, states and layers.
+
 All vector tables use cosine distance: 0 means the same direction, 1 means
 unrelated, 2 means opposite. sqlite-vec compares the query with every
 vector, with no approximate index. On a laptop, that takes about 7 ms for
@@ -605,8 +619,8 @@ Vector queries are easier from Python.
 
 === "Objects by meaning"
 
-    The objects in the kitchen that look most like a text or image query.
-    `:query` is a CLIP ViT-B/16 vector made by the caller.
+    The objects in the kitchen that are present or held and look most like a
+    text or image query. `:query` is a CLIP ViT-B/16 vector made by the caller.
 
     ```sql
     WITH matches AS (
@@ -614,6 +628,7 @@ Vector queries are easier from Python.
         FROM object_clip_vit_b16
         WHERE embedding MATCH :query AND k = 5
           AND map_id = :map AND room_id = :room
+          AND state IN ('present', 'held') AND layer = 'movable'
     )
     SELECT o.id, o.label, o.center_x, o.center_y, o.center_z, matches.distance
     FROM matches JOIN object o ON o.id = matches.object_id
@@ -621,9 +636,10 @@ Vector queries are easier from Python.
     ```
 
     `k = 5` must be on the `vec0` table itself, so the search stays in its
-    own `WITH` part and the join comes after. The `map_id` and `room_id`
-    filters are applied during the search, so you still get 5 results when
-    the kitchen has 5 objects.
+    own `WITH` part and the join comes after. The `map_id`, `room_id`, `state`
+    and `layer` filters are applied during the search, so you still get 5
+    results when the kitchen has 5 such objects, however many closer matches
+    other rooms hold.
 
 === "Recognize a face"
 

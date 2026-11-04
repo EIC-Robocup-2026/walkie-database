@@ -22,7 +22,8 @@ different things.
   cannot be compared. All use cosine distance.
 - A vector table's rows share ids with the table they index, and carry as
   metadata the columns that searches filter on, such as `map_id` and
-  `room_id`.
+  `room_id`. `object_clip_vit_b16` also carries `state` and `layer`, since
+  migration 0005, so that a search filters on them before it ranks.
 - A new model means a new migration with a new table. The old table stays
   until every row has a vector from the new model, unless its vectors are
   not worth keeping. Then the same migration drops it.
@@ -44,6 +45,12 @@ different things.
   write must be inside a transaction.
 - sqlite-vec 0.1 cannot rename a `vec0` table. A migration that renames one
   creates it again and copies the rows, as migration 0002 does.
+- It cannot add a column to one either. Migration 0005 stages the vectors in a
+  temporary table, drops the `vec0` table and its triggers, and creates them
+  again under the same name. The bytes do not change, and the metadata comes
+  from the `object` rows.
+- An object cannot change map (trigger `object_map_fixed`), so `map_id` in a
+  vector table is fixed for the life of its row.
 - `room_clip_vit_b16` and `object_clip_vit_b16` came before the rule that
   `<model>` names the weights, so they name only the network. They need a
   migration that adds their weights.

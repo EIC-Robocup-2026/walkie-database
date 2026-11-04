@@ -4,20 +4,24 @@ import json
 import math
 import sqlite3
 
+import numpy as np
 import pytest
 
 from walkie_database.db import connect, transaction
 from walkie_database.migrate import migrate
 from walkie_database.objects import (
     MAX_LINK_HOPS,
+    MAX_SEARCH_RESULTS,
     IdReservation,
     NewObject,
     ObjectBox,
     insert_object,
     object_id_highwater,
     reserve_object_ids,
+    search_object_vectors,
     set_split_from,
     tombstone_object,
+    write_object_vector,
 )
 from walkie_database.people import Refused
 
@@ -591,3 +595,259 @@ def test_bad_color_shares_are_refused_on_update(store, cup, shares):
 def test_last_id_names_only_the_three_counters(store):
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         store.execute("INSERT INTO last_id (table_name, id) VALUES ('room', 0)")
+
+
+# Object vectors --------------------------------------------------------------
+
+MODEL = "clip_vit_b16"
+# Long enough that vec0 keeps it outside its fixed metadata slot.
+LONG_MAP = "chula-pat14-6-2026-11-05-abcd1234"
+
+
+def axis(index: int, other: float = 0.0) -> np.ndarray:
+    """A vector along one axis, leaning towards the last axis by *other*."""
+    vector = np.zeros(512, dtype=np.float32)
+    vector[index] = 1.0
+    vector[-1] = other
+    return vector
+
+
+def add_room(conn, room_id, name, map_id="m1"):
+    conn.execute("INSERT INTO room (id, map_id, name) VALUES (?, ?, ?)", (room_id, map_id, name))
+
+
+def add_with_vector(conn, vector, **fields) -> int:
+    reservation = reserve_object_ids(conn)
+    with transaction(conn):
+        insert_object(conn, new_cup(**fields), reservation.first, reservation=reservation)
+        write_object_vector(conn, reservation.first, MODEL, vector)
+    return reservation.first
+
+
+def vector_metadata(conn, object_id):
+    row = conn.execute(
+        "SELECT map_id, room_id, state, layer FROM object_clip_vit_b16 WHERE object_id = ?",
+        (object_id,),
+    ).fetchone()
+    return None if row is None else tuple(row)
+
+
+def found(conn, query, **filters):
+    return [match.object_id for match in search_object_vectors(conn, MODEL, query, **filters)]
+
+
+@pytest.fixture
+def rooms(store):
+    with transaction(store):
+        add_room(store, 1, "kitchen")
+        add_room(store, 2, "living room")
+    return store
+
+
+def test_a_vector_takes_its_metadata_from_the_row(rooms):
+    object_id = add_with_vector(
+        rooms, axis(0), room_id=2, state="present", layer="anchor", key="table"
+    )
+    assert vector_metadata(rooms, object_id) == ("m1", 2, "present", "anchor")
+
+
+def test_a_vector_with_no_room_stores_zero(store):
+    assert vector_metadata(store, add_with_vector(store, axis(0)))[1] == 0
+
+
+def test_a_stored_vector_has_length_one(store):
+    object_id = add_with_vector(store, axis(0) * 7)
+    stored = store.execute(
+        "SELECT embedding FROM object_clip_vit_b16 WHERE object_id = ?", (object_id,)
+    ).fetchone()[0]
+    assert np.linalg.norm(np.frombuffer(stored, dtype=np.float32)) == pytest.approx(1.0)
+
+
+def test_writing_a_vector_again_replaces_it(store):
+    object_id = add_with_vector(store, axis(0))
+    with transaction(store):
+        write_object_vector(store, object_id, MODEL, axis(1))
+    assert store.execute("SELECT count(*) FROM object_clip_vit_b16").fetchone()[0] == 1
+    assert found(store, axis(1), map_id="m1", max_results=1) == [object_id]
+    distance = search_object_vectors(store, MODEL, axis(1), map_id="m1")[0].distance
+    assert distance == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("model", "values", "message"),
+    [
+        ("siglip", np.ones(512), "names the model 'siglip'"),
+        ("clip_vit_b16; DROP TABLE object", np.ones(512), "which has no object table"),
+        (MODEL, np.ones(3), "has 3 values"),
+        (MODEL, np.full(512, np.nan), "NaN or infinite"),
+        (MODEL, np.zeros(512), "all zeros"),
+    ],
+)
+def test_a_bad_vector_writes_nothing(store, cup, model, values, message):
+    with transaction(store):
+        with pytest.raises(Refused, match=message):
+            write_object_vector(store, cup, model, values)
+    assert store.execute("SELECT count(*) FROM object_clip_vit_b16").fetchone()[0] == 0
+
+
+def test_a_vector_needs_a_transaction_and_an_object(store):
+    with pytest.raises(Refused, match="inside the caller's transaction"):
+        write_object_vector(store, 1, MODEL, axis(0))
+    with transaction(store):
+        with pytest.raises(Refused, match="does not exist"):
+            write_object_vector(store, 1, MODEL, axis(0))
+
+
+def test_a_search_is_nearest_first(store):
+    far = add_with_vector(store, axis(1))
+    near = add_with_vector(store, axis(0))
+    matches = search_object_vectors(store, MODEL, axis(0), map_id="m1")
+    assert [match.object_id for match in matches] == [near, far]
+    assert matches[0].distance == pytest.approx(0.0, abs=1e-6)
+    assert matches[1].distance == pytest.approx(1.0, abs=1e-6)
+
+
+def test_a_high_similarity_object_in_the_wrong_room_cannot_hide_the_wanted_one(rooms):
+    # Twenty near-copies of the query in the living room, and one weak match in
+    # the kitchen. With a filter after the search, k = 1 would find a copy and
+    # then drop it, and the kitchen's object would never be seen.
+    for _ in range(20):
+        add_with_vector(rooms, axis(0), room_id=2)
+    wanted = add_with_vector(rooms, axis(1, other=0.05), room_id=1)
+    assert found(rooms, axis(0), map_id="m1", room_id=1, max_results=1) == [wanted]
+
+
+def test_a_filter_runs_before_the_rank_for_map(store):
+    store.execute("INSERT INTO map (id, created_at) VALUES (?, 0)", (LONG_MAP,))
+    for _ in range(20):
+        add_with_vector(store, axis(0), map_id="m2")
+    wanted = add_with_vector(store, axis(1), map_id=LONG_MAP)
+    assert found(store, axis(0), map_id=LONG_MAP, max_results=1) == [wanted]
+    assert len(found(store, axis(0), map_id="m2", max_results=50)) == 20
+    assert found(store, axis(0), map_id="nowhere") == []
+
+
+def test_a_filter_runs_before_the_rank_for_state(store):
+    for _ in range(20):
+        add_with_vector(store, axis(0), state="missing")
+    present = add_with_vector(store, axis(1), state="present")
+    held = add_with_vector(store, axis(2), state="held")
+    assert found(store, axis(0), map_id="m1", states=["present"], max_results=1) == [present]
+    assert set(found(store, axis(0), map_id="m1", states=["present", "held"], max_results=2)) == {
+        present,
+        held,
+    }
+
+
+def test_a_filter_runs_before_the_rank_for_layer(store):
+    for _ in range(20):
+        add_with_vector(store, axis(0), layer="anchor")
+    movable = add_with_vector(store, axis(1))
+    assert found(store, axis(0), map_id="m1", layers=["movable"], max_results=1) == [movable]
+
+
+def test_every_filter_applies_together(rooms):
+    wanted = add_with_vector(rooms, axis(3), room_id=1, state="present")
+    for fields in (
+        {"room_id": 2, "state": "present"},
+        {"room_id": 1, "state": "missing"},
+        {"room_id": 1, "state": "present", "layer": "anchor"},
+        {"map_id": "m2", "state": "present"},
+    ):
+        add_with_vector(rooms, axis(0), **fields)
+    matches = found(
+        rooms, axis(0), map_id="m1", room_id=1, states=["present", "held"], layers=["movable"],
+        max_results=1,
+    )
+    assert matches == [wanted]
+
+
+def test_room_zero_finds_objects_in_no_room(rooms):
+    add_with_vector(rooms, axis(0), room_id=1)
+    roomless = add_with_vector(rooms, axis(1))
+    assert found(rooms, axis(0), map_id="m1", room_id=0) == [roomless]
+
+
+@pytest.mark.parametrize("max_results", [0, -1, MAX_SEARCH_RESULTS + 1])
+def test_a_search_refuses_a_bad_limit(store, max_results):
+    with pytest.raises(Refused, match="max_results"):
+        search_object_vectors(store, MODEL, axis(0), map_id="m1", max_results=max_results)
+
+
+def test_a_search_refuses_a_bad_query(store):
+    with pytest.raises(Refused, match="names the model"):
+        search_object_vectors(store, "siglip", axis(0), map_id="m1")
+    with pytest.raises(Refused, match="all zeros"):
+        search_object_vectors(store, MODEL, np.zeros(512), map_id="m1")
+
+
+def test_a_state_or_layer_change_reaches_the_vector(store):
+    object_id = add_with_vector(store, axis(0), state="candidate")
+    with transaction(store):
+        store.execute("UPDATE object SET state = 'present' WHERE id = ?", (object_id,))
+    assert vector_metadata(store, object_id)[2:] == ("present", "movable")
+    with transaction(store):
+        store.execute("UPDATE object SET layer = 'anchor' WHERE id = ?", (object_id,))
+    assert vector_metadata(store, object_id)[2:] == ("present", "anchor")
+
+
+def test_a_tombstone_leaves_a_search_for_live_objects(store):
+    object_id = add_with_vector(store, axis(0), state="present")
+    with transaction(store):
+        tombstone_object(store, object_id)
+    assert found(store, axis(0), map_id="m1", states=["present", "held"]) == []
+    assert found(store, axis(0), map_id="m1", states=["discarded"]) == [object_id]
+
+
+def test_a_room_change_reaches_the_vector(rooms):
+    object_id = add_with_vector(rooms, axis(0), room_id=1)
+    with transaction(rooms):
+        rooms.execute("UPDATE object SET room_id = 2 WHERE id = ?", (object_id,))
+    assert vector_metadata(rooms, object_id)[1] == 2
+    with transaction(rooms):
+        rooms.execute("UPDATE object SET room_id = NULL WHERE id = ?", (object_id,))
+    assert vector_metadata(rooms, object_id)[1] == 0
+
+
+def test_deleting_a_room_sets_the_vector_to_no_room(rooms):
+    object_id = add_with_vector(rooms, axis(0), room_id=1)
+    with transaction(rooms):
+        rooms.execute("DELETE FROM room WHERE id = 1")
+    assert vector_metadata(rooms, object_id)[1] == 0
+    assert found(rooms, axis(0), map_id="m1", room_id=1) == []
+
+
+def test_deleting_an_object_or_its_map_deletes_the_vector(store):
+    object_id = add_with_vector(store, axis(0))
+    with transaction(store):
+        store.execute("DELETE FROM object WHERE id = ?", (object_id,))
+    assert vector_metadata(store, object_id) is None
+    other = add_with_vector(store, axis(0), map_id="m2")
+    with transaction(store):
+        store.execute("DELETE FROM map WHERE id = 'm2'")
+    assert vector_metadata(store, other) is None
+
+
+def test_moving_an_object_to_another_map_is_refused(store):
+    object_id = add_with_vector(store, axis(0))
+    with pytest.raises(sqlite3.IntegrityError, match="cannot move to another map"):
+        with transaction(store):
+            store.execute("UPDATE object SET map_id = 'm2' WHERE id = ?", (object_id,))
+    assert vector_metadata(store, object_id)[0] == "m1"
+    # An update that keeps the map still works.
+    with transaction(store):
+        store.execute("UPDATE object SET map_id = 'm1', label = 'mug' WHERE id = ?", (object_id,))
+
+
+def test_a_vector_table_takes_no_null_metadata(store, cup):
+    embedding = axis(0).tobytes()
+    for state, layer in ((None, "movable"), ("present", None)):
+        with pytest.raises(sqlite3.OperationalError, match="NULL"):
+            with transaction(store):
+                store.execute(
+                    """INSERT INTO object_clip_vit_b16
+                           (object_id, embedding, map_id, room_id, state, layer)
+                       VALUES (?, ?, 'm1', 0, ?, ?)""",
+                    (cup, embedding, state, layer),
+                )
+    assert store.execute("SELECT count(*) FROM object_clip_vit_b16").fetchone()[0] == 0

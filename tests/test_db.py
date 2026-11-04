@@ -45,6 +45,8 @@ def test_transaction_removes_half_written_vec0_row(db):
     with pytest.raises(sqlite3.OperationalError, match="NULL"):
         with transaction(db):
             db.execute(
-                "INSERT INTO object_clip_vit_b16 VALUES (1, ?, 'm1', NULL)", (embedding,)
+                """INSERT INTO object_clip_vit_b16 (object_id, embedding, map_id, room_id, state, layer)
+                   VALUES (1, ?, 'm1', NULL, 'candidate', 'movable')""",
+                (embedding,),
             )
     assert db.execute("SELECT count(*) FROM object_clip_vit_b16").fetchone()[0] == 0

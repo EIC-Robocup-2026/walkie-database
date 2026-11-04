@@ -240,3 +240,156 @@ def test_0004_that_fails_at_the_end_leaves_schema_3_unchanged(tmp_path, v3):
 def test_ids_reserved_after_the_upgrade_are_above_every_old_id(v3):
     upgraded(v3, 4)
     assert reserve_object_ids(v3).first == FAR_LAMP + 1
+
+
+# Migration 0005 --------------------------------------------------------------
+
+
+def vector_rows(conn) -> list[tuple]:
+    return [
+        tuple(row)
+        for row in conn.execute(
+            """SELECT object_id, embedding, map_id, room_id, state, layer
+               FROM object_clip_vit_b16 ORDER BY object_id"""
+        )
+    ]
+
+
+def test_0005_keeps_the_exact_bytes_of_every_vector(v3):
+    upgraded(v3, 5)
+    stored = {row[0]: row[1] for row in vector_rows(v3)}
+    assert stored == vectors()
+
+
+def test_0005_takes_metadata_from_the_object_rows(v3):
+    upgraded(v3, 5)
+    assert [(row[0], *row[2:]) for row in vector_rows(v3)] == [
+        (TABLE, MAP_ID, 1, "present", "anchor"),
+        (CUP, MAP_ID, 1, "candidate", "movable"),
+        (SOFA, MAP_ID, 2, "candidate", "movable"),
+        (LOST_MUG, MAP_ID, 0, "candidate", "movable"),
+        (FAR_LAMP, OTHER_MAP_ID, 0, "present", "anchor"),
+    ]
+
+
+def test_0005_corrects_metadata_that_had_drifted_at_version_3(v3):
+    with transaction(v3):
+        v3.execute("UPDATE object_clip_vit_b16 SET room_id = 2 WHERE object_id = ?", (CUP,))
+    upgraded(v3, 5)
+    assert v3.execute(
+        "SELECT room_id FROM object_clip_vit_b16 WHERE object_id = ?", (CUP,)
+    ).fetchone()[0] == 1
+
+
+def test_0005_leaves_a_vector_with_no_object_behind(v3):
+    with transaction(v3):
+        v3.execute(
+            "INSERT INTO object_clip_vit_b16 (object_id, embedding, map_id, room_id) VALUES (99, ?, ?, 0)",
+            (vectors()[CUP], MAP_ID),
+        )
+    upgraded(v3, 5)
+    assert [row[0] for row in vector_rows(v3)] == [TABLE, CUP, SOFA, LOST_MUG, FAR_LAMP]
+
+
+def test_0005_does_not_touch_the_room_vectors(v3):
+    def room_vectors():
+        rows = v3.execute(
+            "SELECT room_id, embedding, map_id FROM room_clip_vit_b16 ORDER BY room_id"
+        ).fetchall()
+        sql = v3.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'room_clip_vit_b16'"
+        ).fetchone()[0]
+        return [tuple(row) for row in rows], sql
+
+    upgraded(v3, 4)
+    before = room_vectors()
+    upgraded(v3, 5)
+    assert room_vectors() == before
+
+
+def test_0005_leaves_nothing_of_the_old_table_or_its_stage(v3):
+    def names():
+        rows = v3.execute("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+        return {row[0] for row in rows}
+
+    upgraded(v3, 4)
+    before = names()
+    upgraded(v3, 5)
+    after = names()
+    assert before - after == set()
+    # Only the two new triggers, and the shadow tables of the two new columns.
+    assert after - before == {
+        "object_state_layer_update",
+        "object_map_fixed",
+        "object_clip_vit_b16_metadatachunks02",
+        "object_clip_vit_b16_metadatachunks03",
+        "object_clip_vit_b16_metadatatext02",
+        "object_clip_vit_b16_metadatatext03",
+    }
+    assert v3.execute("SELECT count(*) FROM sqlite_temp_master").fetchone()[0] == 0
+
+
+def test_0005_recreates_the_table_under_the_same_name_and_declares_it_fully(v3):
+    upgraded(v3, 5)
+    sql = v3.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'object_clip_vit_b16'"
+    ).fetchone()[0]
+    for declaration in ("object_id INTEGER PRIMARY KEY", "FLOAT[512] distance_metric=cosine",
+                        "map_id    TEXT", "room_id   INTEGER", "state     TEXT", "layer     TEXT"):
+        assert declaration in sql
+
+
+def test_0005_twice_changes_nothing(v3):
+    upgraded(v3, 5)
+    before = snapshot(v3)
+    upgraded(v3, 5)
+    assert snapshot(v3) == before
+
+
+def test_0005_that_fails_at_the_end_rolls_everything_back(tmp_path, v3):
+    upgraded(v3, 4)
+    before = snapshot(v3)
+    migrations = load_migrations()
+
+    with pytest.raises(sqlite3.OperationalError, match="no_such_table"):
+        migrate(v3, [*migrations[:4], failing_copy(tmp_path, migrations[4])])
+
+    assert schema_version(v3) == 4
+    assert snapshot(v3) == before
+    assert not v3.in_transaction
+    assert v3.execute("SELECT count(*) FROM sqlite_temp_master").fetchone()[0] == 0
+    with pytest.raises(sqlite3.OperationalError, match="state"):
+        v3.execute("SELECT state FROM object_clip_vit_b16")
+
+    # The old table and its triggers work on the same connection, with the old bytes.
+    embeddings = vectors()
+    rows = v3.execute(
+        "SELECT object_id FROM object_clip_vit_b16 WHERE embedding MATCH ? AND k = 1 AND room_id = 1",
+        (embeddings[CUP],),
+    ).fetchall()
+    assert [row[0] for row in rows] == [CUP]
+    with transaction(v3):
+        v3.execute("DELETE FROM object WHERE id = ?", (SOFA,))
+    assert v3.execute(
+        "SELECT count(*) FROM object_clip_vit_b16 WHERE object_id = ?", (SOFA,)
+    ).fetchone()[0] == 0
+
+    # The real migration still runs afterwards.
+    upgraded(v3, 5)
+    assert {row[0]: row[1] for row in vector_rows(v3)} == {
+        key: value for key, value in embeddings.items() if key != SOFA
+    }
+
+
+def test_0005_that_fails_is_also_undone_after_a_restart(tmp_path, v3):
+    upgraded(v3, 4)
+    before = snapshot(v3)
+    migrations = load_migrations()
+    with pytest.raises(sqlite3.OperationalError):
+        migrate(v3, [*migrations[:4], failing_copy(tmp_path, migrations[4])])
+    v3.close()
+    reopened = connect(tmp_path / "walkie.db")
+    assert snapshot(reopened) == before
+    assert {row[0]: row[1] for row in reopened.execute(
+        "SELECT object_id, embedding FROM object_clip_vit_b16")} == vectors()
+    reopened.close()

@@ -42,6 +42,26 @@ def test_nearest_object_to_a_cup_is_the_other_cup(db):
     assert labels == ["cup"]
 
 
+def test_map_objects_are_anchors_and_every_object_is_present(db):
+    seed.seed(db)
+    for row in db.execute("SELECT source, layer, state, p_exist FROM object"):
+        assert row["state"] == "present"
+        assert row["layer"] == ("anchor" if row["source"] == "map" else "movable")
+        assert row["p_exist"] == (0.95 if row["source"] == "map" else 0.5)
+
+
+def test_every_vector_carries_the_metadata_of_its_object(db):
+    seed.seed(db)
+    rows = db.execute(
+        """SELECT o.map_id, coalesce(o.room_id, 0), o.state, o.layer,
+                  v.map_id, v.room_id, v.state, v.layer
+           FROM object o JOIN object_clip_vit_b16 v ON v.object_id = o.id"""
+    ).fetchall()
+    assert len(rows) == len(seed.OBJECTS)
+    for row in rows:
+        assert tuple(row)[:4] == tuple(row)[4:]
+
+
 def test_a_face_is_recognised_as_its_person(db):
     seed.seed(db)
     # Charlie has three face samples, so the two nearest to one of them are both his.
