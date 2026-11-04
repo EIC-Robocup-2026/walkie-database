@@ -82,11 +82,13 @@ pixi run db-browse
 | `src/walkie_database/migrate.py`    | Applies the schema migrations                             |
 | `src/walkie_database/migrations/`   | The schema, as numbered SQL files                         |
 | `src/walkie_database/seed.py`       | The sample data that `db-seed` writes                     |
+| `src/walkie_database/map_config.py` | Reads a map YAML and its image for the map digest         |
+| `src/walkie_map_id.py`              | The canonical map digest. Other repositories use this exact file |
 | `ros2_ws/src/walkie_database_msgs/` | The node's messages and services, built by `build-msgs`   |
 | `ros2_ws.repos`                     | The walkie-vision commit whose messages this repository nests |
 | `tools/import_interfaces.py`        | Clones that commit into `ros2_ws/src/walkie-vision`, which Git ignores |
 | `scripts/activate.sh`               | Adds the `build-msgs` output to every `pixi run`          |
 | `datasette-plugins/`                | Datasette plugins for `db-browse`                         |
-| `tests/`                            | Tests for the connection, migrations, schema, node, people, sample data and interfaces |
+| `tests/`                            | Tests for the connection, migrations, schema, node, people, sample data, interfaces and map identity |
 | `data/`                             | The database files. Not in Git.                           |
 | `docs/`                             | The documentation site (MkDocs)                           |

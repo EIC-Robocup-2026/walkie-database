@@ -10,6 +10,12 @@ dependencies = []
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
+# walkie_map_id is a top-level module beside the package, so another repository
+# can use that one file without the database's runtime.
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["walkie_map_id"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

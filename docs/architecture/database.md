@@ -45,6 +45,9 @@ them by meaning, by position and by words.
   and state are frozen ahead of their handlers, and the old types keep their
   hashes. They nest `walkie_vision_msgs`, which this repository builds from a
   pinned commit ([ADR-0019](decisions/0019-object-service-contracts.md)).
+- **A map's identity is a hash of its content.** `src/walkie_map_id.py` hashes a
+  map's decoded pixels and semantic metadata, and other repositories use that
+  exact file ([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)).
 
 ## The parts
 
@@ -692,6 +695,53 @@ Vector queries are easier from Python.
     some tasks need go into `attributes`, so a new kind of fact needs no
     migration.
 
+## Map identity
+
+`src/walkie_map_id.py` names a map by what it holds, not by its file names
+([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)).
+
+| Function                           | What it does                                                         |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `decode_pgm(data)`                 | Returns width, height, maxval and the samples of a P2 or P5 image    |
+| `map_digest(pgm, metadata)`        | Returns the 64-character SHA-256 of the image's bytes and the YAML's values |
+| `make_map_id(arena, date, digest)` | Returns `<arena>-<YYYY-MM-DD>-<digest[:8]>`                          |
+
+All three raise `ValueError` on anything else.
+
+| Keeps the digest                                   | Changes the digest                           |
+| -------------------------------------------------- | -------------------------------------------- |
+| P2 or P5, header comments and whitespace           | Any pixel, or the width and height           |
+| The image's name, YAML key order, comments         | `resolution`, `origin`, `negate`             |
+| A description, or any other YAML key               | `occupied_thresh`, `free_thresh`, `mode`     |
+| `0` or `0.0` or `-0.0`                             | A new algorithm version                      |
+| Another `maxval` that normalizes to the same samples |                                            |
+
+!!! warning "The helper exists, the gate does not"
+    The node still accepts any `map_id` string, and only warns when the map is
+    not in the `map` table. The startup gate and the seed tools come later.
+
+`walkie_database.map_config` holds this repository's YAML side.
+`digest_map_files(path)` reads a map YAML and the image it names, and
+`parse_map_yaml(text)` rejects malformed YAML, repeated keys and merge keys.
+`walkie_map_id` itself never parses YAML, which is why it has no dependencies.
+
+### Use it from another repository
+
+1. Pin a commit of this repository, as for the messages.
+2. Get the file verbatim, with `git show <commit>:src/walkie_map_id.py`, in your
+   dependency setup. Record the file's SHA-256 next to the pin, and check it.
+3. Never copy it by hand or write your own. Two implementations drift, and one map
+   would then have two identities.
+4. Parse the YAML yourself, with a safe parser that rejects repeated keys. Pass the
+   image's bytes and the parsed dict.
+5. Compare **full digests**. The 8 characters in a map ID only name a directory.
+
+`tests/fixtures/map_id/golden.json` holds the vectors to check a copy against:
+each has a `pgm_hex`, a `metadata`, the decoded samples, and the `digest` and
+`map_id`. It also lists images and metadata that must be rejected. A separate
+script computed them by hand, without importing this module. This repository only
+runs the module on Python 3.12.
+
 ## What lives where
 
 | What                              | Where                                       | In Git |
@@ -702,6 +752,7 @@ Vector queries are easier from Python.
 | Raw detections, for re-tuning     | A `ros2 bag` of the detection topic ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)) | No |
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |
 | Connection settings               | `src/walkie_database/db.py`                 | Yes    |
+| The map identity helper           | `src/walkie_map_id.py`                      | Yes    |
 | The node's messages and services  | `ros2_ws/src/walkie_database_msgs/`         | Yes    |
 | The walkie-vision commit they nest | `ros2_ws.repos`                            | Yes    |
 | The clone of that commit          | `ros2_ws/src/walkie-vision/`, written by `pixi run import-interfaces` | No |
@@ -783,3 +834,7 @@ The sim harvest decision, ADR-0016, is on the
 ??? success "ADR-0019: Freeze the object services in new types, pinned to walkie-vision · Accepted"
 
     --8<-- "architecture/decisions/0019-object-service-contracts.md:body"
+
+??? success "ADR-0020: Identify a map by its pixels and metadata, and keep seed lineage · Accepted"
+
+    --8<-- "architecture/decisions/0020-map-identity-and-seed-lineage.md:body"
