@@ -68,9 +68,10 @@ them by meaning, by position and by words.
     Today the node opens the file, migrates it, and answers `find_objects`
     and the people and session services
     ([The node's interface](#the-nodes-interface)). Offline tools build and restore
-    a store ([Seeds, restore and the map gate](#seeds-restore-and-the-map-gate)). The
-    other topics and services below are the plan, starting with
-    [object memory](object-memory.md).
+    a store ([Seeds, restore and the map gate](#seeds-restore-and-the-map-gate)). In
+    memory mode, the node also receives and checks observations and localizes them
+    ([The object contract](#the-object-contract)). The other topics and services
+    below are the plan, starting with [object memory](object-memory.md).
 
 ```mermaid
 flowchart LR
@@ -113,6 +114,7 @@ nests, and `pixi run build-msgs` builds both
 | `map_id`  | empty            | The map the robot is using (`map.id`). Requests that name no map search this one. On the robot, set it to the map the robot is localized in: while it is empty, every request that names no map fails. With `memory_enabled` false, the node reads it on every request, so `ros2 param set` changes it at once. In memory mode it is required and read-only. |
 | `map_folder` | empty         | The folder with `map.yaml`, its image and an optional `manifest.yaml`. Required in memory mode, and ignored otherwise. Read-only. |
 | `use_sim_time` | false       | True makes the node's clock follow `/clock`. It is the store's clock kind: false is `wall` and true is `ros_sim`. It cannot change while the node runs. |
+| `objects_topic` | `/walkie_vision/objects` | The topic of `ObjectDetectionArray` observations, in memory mode. A simulated publisher uses `/walkie_vision/sim/objects`. Read-only. |
 
 The node holds the store's lock, `<db_path>.lock`, for its whole life. A second node
 or an offline tool on the same file is refused. A refused start logs `Not starting:`
@@ -441,10 +443,13 @@ first.
 
 ### The object contract
 
-!!! warning "Types only, so far"
-    These types are built and frozen, but the node serves none of these
-    endpoints yet. A type existing does not mean a feature exists. Until a
-    handler lands, a client finds no service.
+!!! warning "Partly served, so far"
+    These types are built and frozen. The node serves `localize_objects` and the
+    five writes that answer `NOT_READY`. Those six answer `NOT_READY` with
+    `memory_enabled` false. A type existing does not mean a feature exists. Until a
+    handler lands, a client finds no service. `search_objects`, `get_object`,
+    `find_near`, `list_rooms`, `get_room_contents`, `remember_event`, `find_events`
+    and `get_store_status` have no handler yet.
 
 | Endpoint under `/walkie_database/` | Type                                                      | When it is served, what it does                                   |
 | ---------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -454,13 +459,13 @@ first.
 | `list_rooms`                       | `ListRooms`                                               | The rooms of a map                                                 |
 | `get_room_contents`                | `GetRoomContents`                                         | What memory holds in one room                                      |
 | `remember_event`, `find_events`    | `RememberEvent`, `FindEvents`                             | The task's event log                                               |
-| `localize_objects`                 | `LocalizeObjects`                                         | Stateless centroids of supplied clouds, at their stamp. Stores nothing |
+| `localize_objects`                 | `LocalizeObjects`                                         | Stateless centroids of supplied clouds, at their stamp, by the [rules on the object memory page](object-memory.md#what-is-built-the-checks-not-the-merging). Stores nothing |
 | `get_store_status`                 | `GetStoreStatus`                                          | A read-only probe of the map, schema and store                     |
-| `set_object_state`                 | `SetObjectState`                                          | `NOT_READY` until the fusion core lands                            |
-| `report_sighting`                  | `ReportSighting`                                          | `NOT_READY` until the fusion core lands                            |
+| `set_object_state`                 | `SetObjectState`                                          | `NOT_READY` until the fusion core lands. It keeps no row           |
+| `report_sighting`                  | `ReportSighting`                                          | `NOT_READY` until the fusion core lands. It keeps no row           |
 | `arena_reset`                      | `ArenaReset`                                              | `NOT_READY` until the fusion core lands. It never restores a file  |
-| `submit_detections`                | `SubmitDetections`                                        | `NOT_READY` until the fusion core lands                            |
-| `describe_object`                  | `DescribeObject`                                          | `NOT_READY` while captions are disabled                            |
+| `submit_detections`                | `SubmitDetections`                                        | `NOT_READY` until the fusion core lands. It keeps no row           |
+| `describe_object`                  | `DescribeObject`                                          | `NOT_READY` while captions are disabled. It keeps no row           |
 
 `objects/updates` (`ObjectUpdates`, reliable, volatile, depth 100) will announce
 committed changes, and a client that sees a gap in `sequence` or a new `store_id`

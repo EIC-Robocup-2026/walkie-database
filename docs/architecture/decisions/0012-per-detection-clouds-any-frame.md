@@ -26,17 +26,32 @@ first assumed a type that did not exist, with points in any TF frame.
   map frame at that stamp, and has no fallback to a later transform.
 - The message types live in walkie-vision's interface package. This repository
   builds that package from a pinned commit.
+- The node trusts nothing from the publisher. It checks each array at its own
+  boundary and refuses the whole array if any part is malformed, using the rules
+  in [Receive detections](/architecture/object-memory.md#1-receive-detections).
+- The node's TF listener spins a private node on its own thread. A lookup that
+  waits blocks the node's only executor, so that executor could not deliver the
+  transform. Handing the database node to the listener's thread is not an option:
+  that thread would then run every service, and the SQLite connection refuses
+  another thread
+  ([ADR-0005](/architecture/decisions/0005-one-node-owns-the-database.md)).
 
 **Consequences**
 
 - Perception stays independent of maps
   ([ADR-0008](/architecture/decisions/0008-coordinates-in-a-named-map.md)).
-- The node needs TF from the camera to the map at the image's time. A
-  detection without that transform is dropped.
+- The node needs TF from the camera to the map at the image's time. Without it,
+  `LocalizeObjects` answers `TF_UNAVAILABLE` for every entry, and the object memory
+  will drop the detection.
 - A change to the message definition must reach perception and this node
   together, or they stop understanding each other.
-- This ADR stays Proposed until object memory consumes the clouds. The types are
-  frozen, but nothing writes a detection to memory yet.
+- A second node, `transform_listener_impl_...`, appears in the graph. A lookup holds
+  the executor for at most about 50 ms.
+- Perception must send arrays that pass the checks. A fake model's vector has no
+  table in the store, so a fake publisher's vector-bearing array is counted as
+  rejected, which is what the pair test relies on.
+- This ADR stays Proposed until object memory consumes the clouds. The checks and
+  `LocalizeObjects` are built, but nothing writes a detection to memory yet.
 
 **See also:** [Receive detections](/architecture/object-memory.md#1-receive-detections)
 <!-- --8<-- [end:body] -->

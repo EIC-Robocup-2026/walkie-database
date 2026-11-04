@@ -41,6 +41,14 @@ class WriteConflict(Refused):
     """A request id came back with a different operation or payload."""
 
 
+class Rejected(Refused):
+    """A refusal with its own OperationStatus code, named as text, such as NOT_FOUND."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 @contextmanager
 def _integrity_as_refused() -> Iterator[None]:
     """Turn a constraint failure into a refusal that names the rule it broke."""

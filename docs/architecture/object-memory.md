@@ -6,6 +6,8 @@
     `object_observation` ([The Database](database.md)). Their lifecycle fields,
     the object id allocator and tombstones are built
     ([Object fields](database.md#object-fields)), and nothing writes them yet.
+    The node does receive and check observations, and it can localize them, but
+    receiving one [creates no row](#what-is-built-the-checks-not-the-merging).
 
 Perception sees the same cup many times, from different angles, each time
 as a partial point cloud. Object memory merges those detections into one
@@ -78,8 +80,61 @@ has the `header` (the camera's optical frame and the capture time), the
 
 The node looks up the transform from the array's `header.frame_id` to the map
 frame at `header.stamp`, so perception does not need to know about maps
-([ADR-0012](decisions/0012-per-detection-clouds-any-frame.md)). A detection
-whose transform is not available is dropped and counted in the log.
+([ADR-0012](decisions/0012-per-detection-clouds-any-frame.md)). Once merging is
+built, a detection whose transform is not available is dropped and counted in the
+log.
+
+#### What is built: the checks, not the merging
+
+In memory mode, the node subscribes to the topic named by its `objects_topic`
+parameter, best effort, volatile, depth 1. For each array it does three things:
+
+1. It adds one to `arrays_received`.
+2. It runs the checks below. An array that fails adds one to `arrays_rejected`, and
+   the log says why, at most once every 5 seconds.
+3. It keeps a valid array in one slot in memory, replacing the one before.
+
+That is all. It writes no row, allocates no id, stores no vector and writes no file.
+The slot exists so that the object memory has something to start from. No request
+reads it yet, and `SubmitDetections` and the other writes answer `NOT_READY`
+([The object contract](database.md#the-object-contract)). With `memory_enabled`
+false, the node has no subscription and no TF listener.
+
+The same checks guard `LocalizeObjects`, which fails as a whole when any part is
+malformed. The topic and the service never disagree about what a valid array is.
+
+| Part | An array is refused unless |
+| ---- | -------------------------- |
+| `stream_id` | It is a UUID in canonical form |
+| `header` | `frame_id` is not empty, has no leading slash and is not the map frame. The stamp is valid and not zero, because TF reads a zero time as "the latest" |
+| `camera_info` | Its header equals the array's, with a non-zero image size and a finite non-zero focal length |
+| `classes` | At least one, all non-empty and unique |
+| `label`, `score`, `view_quality` | The label is in `classes`. The other two are finite and in [0, 1] |
+| `bbox` | Finite, sizes not negative, `theta` 0 |
+| `embedding` | Empty with an empty model, or a model the store has a vector table for, with the right length, finite and unit length. So a fake model's vector is refused |
+| `points` | Its header equals the array's. `x`, `y`, `z` float32 at offsets 0, 4, 8, little-endian, dense, height 1, `point_step` 12. Empty or 30 to 2000 points, all finite with `z` above 0 |
+| `crop` | Empty, or a JPEG with the array's header, at most 512 KiB, whose frame header says that each side is 1 to 512 pixels. The node reads that header and decodes no pixels |
+| `color_shares` | Empty, or 12 finite shares that are not negative and sum to 1 |
+| The stamp's age | At most 1 s old and at most 5 ms ahead of the node's clock. Otherwise it is `STALE`, not `INVALID`. An array that arrives before the first clock sample counts as rejected |
+
+`LocalizeObjects` uses these rules to give one result per detection, in order:
+
+| Case | Status |
+| ---- | ------ |
+| Any check fails | `INVALID` or `STALE` for the whole request, with no results |
+| The request names another map | `WRONG_MAP`, with no results |
+| No detections | `OK`, with no results and no lookup |
+| No transform from the frame to the map at the exact stamp, within 50 ms | Each entry is `TF_UNAVAILABLE`, even one with no points, and the request is `OK` |
+| An entry with no points | That entry is `NOT_FOUND` |
+| Otherwise | That entry is `OK`, with the average of its points in the map frame, stamped with the array's stamp |
+
+Between two transforms, TF interpolates. A stamp before the oldest or after the
+newest gets no answer, and never the nearest or the latest transform. A failed entry
+leaves `centroid` at its default and `points_used` at 0, so check its status first.
+
+A clock that jumps back a second or more clears the buffer's dynamic transforms, so a
+restarted simulation cannot read poses from its previous run. Static transforms stay,
+because they do not depend on time.
 
 !!! info "The message lives in walkie-vision"
     The node receives this type and does not own it, so it stays in its

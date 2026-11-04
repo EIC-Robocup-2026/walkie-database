@@ -17,3 +17,4 @@ steps in your own project, or when you add a new kind of memory.
 | [9. Add the people and session services](09-people-services.md)     | Lets the agent remember and recognise people, one session at a time |
 | [10. Pin vision and freeze the object interfaces](10-object-interfaces.md) | Builds the pinned vision types, and defines the object services' types ahead of their handlers |
 | [11. Seed tools, restore and the map gate](11-seed-restore-and-map-gate.md) | Builds a store's seed, resets a stopped store to it, and makes the node refuse the wrong store |
+| [12. Check observations and localize them](12-observations-and-localize.md) | Receives vision's arrays and checks them, serves `LocalizeObjects`, and creates no object rows |

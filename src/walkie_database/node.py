@@ -23,6 +23,15 @@ processes read through its topics and services:
     For each query, the people nearest by face or by appearance, each once,
     nearest first (ADR-0018).
 
+``~/localize_objects`` (``walkie_database_msgs/srv/LocalizeObjects``)
+    The centroid in the map of each detection of an array, with TF at the array's
+    stamp. It stores nothing (ADR-0019).
+
+``~/set_object_state``, ``~/report_sighting``, ``~/arena_reset``,
+``~/submit_detections`` and ``~/describe_object``
+    Their types are final, and they answer NOT_READY until the object memory
+    exists. They read nothing and keep nothing.
+
 The node keeps no session state in memory: it is all in the file.
 
 It holds the store's lock (``<db_path>.lock``) for its whole life, so a second
@@ -35,12 +44,18 @@ required and read-only, and the store's map row, full digest, baseline and clock
 must match them and ``use_sim_time``. A mismatch stops the start before any service
 exists. A seeded store's anchors are stamped once, on the first clock sample.
 
+Memory mode also takes the arrays on the ``objects_topic`` parameter's topic. It
+checks and counts each one, and keeps only the newest valid one. No array creates an
+object (ADR-0019). Without memory mode there is no subscription, and the services
+that need a map answer NOT_READY.
+
 Every start commits a new ``store_id``. Timestamps come from the node's clock, so
 in a simulation they are sim time.
 """
 
 from __future__ import annotations
 
+import functools
 import math
 import sqlite3
 import uuid
@@ -54,19 +69,35 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosgraph_msgs.msg import Clock
-from walkie_database_msgs.msg import Fact, ModelInfo, PersonMatch, PersonMatches, RememberedObject
+from walkie_database_msgs.msg import (
+    Fact,
+    ModelInfo,
+    OperationStatus,
+    PersonMatch,
+    PersonMatches,
+    RememberedObject,
+)
 from walkie_database_msgs.srv import (
+    ArenaReset,
+    DescribeObject,
     EndSession,
     FindObjects,
+    LocalizeObjects,
     MatchPeople,
     RememberPerson,
+    ReportSighting,
+    SetObjectState,
     StartSession,
+    SubmitDetections,
 )
+from walkie_vision_msgs.msg import ObjectDetectionArray
 
 from walkie_database import people
 from walkie_database.db import connect, transaction
+from walkie_database.ingress import ObservationSlot, check_observation
+from walkie_database.localize import FrameSource, localize
 from walkie_database.map_config import (
     ROS_SIM,
     WALL,
@@ -76,6 +107,8 @@ from walkie_database.map_config import (
     read_map_folder,
 )
 from walkie_database.migrate import migrate
+from walkie_database.object_context import Rejected, WriteConflict
+from walkie_database.objects import OBJECT
 from walkie_database.store_lock import StoreLock, StoreLocked
 
 # max_results of FindObjects and MatchPeople when the caller sends 0, and the
@@ -111,10 +144,56 @@ LIMIT :limit
 _READ_ONLY = ParameterDescriptor(read_only=True)
 # As rclpy's TimeSource subscribes, which any /clock publisher can reach.
 _CLOCK_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+# Only the newest observation matters, and a late one is stale anyway. A reliable
+# publisher also matches this.
+_OBSERVATION_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
+_REJECTED_LOG_PERIOD_S = 5.0
+_MAX_STATUS_MESSAGE = 512
 
 
 class _ClockNotReady(ValueError):
     """Use_sim_time is on, and no /clock sample has arrived."""
+
+
+def _answer(response, code: str, message: str):
+    """Set a response's status. *code* names an OperationStatus constant."""
+    response.status = OperationStatus(
+        code=getattr(OperationStatus, code), message=message[:_MAX_STATUS_MESSAGE]
+    )
+    return response
+
+
+def _status_handler(verb: str):
+    """Answer a handler's refusals and failures as a status, and its return as OK.
+
+    The handler returns the OK message, or None. It assigns its results last, so that
+    a failure sends none of them.
+    """
+
+    def wrap(method):
+        @functools.wraps(method)
+        def handler(self, request, response):
+            try:
+                message = method(self, request, response)
+            except WriteConflict as e:
+                return _answer(response, "CONFLICT", str(e))
+            except Rejected as e:
+                return _answer(response, e.code, str(e))
+            except people.Refused as e:
+                return _answer(response, "INVALID", str(e))
+            except (sqlite3.Error, ValueError) as e:
+                self.get_logger().error(f"{method.__name__} failed: {e}")
+                return _answer(response, "INTERNAL", f"The database could not {verb}: {e}")
+            return _answer(response, "OK", message or "")
+
+        return handler
+
+    return wrap
 
 
 class DatabaseNode(Node):
@@ -129,6 +208,10 @@ class DatabaseNode(Node):
         self._refresh_pending = False
         # The snapshot's sequence starts at zero for each store_id.
         self.publication_sequence = 0
+        self._frames: FrameSource | None = None
+        self._observations: ObservationSlot | None = None
+        self._map_frame = ""
+        self._object_models: dict[str, int] = {}
         try:
             self._start()
         except BaseException:
@@ -147,6 +230,9 @@ class DatabaseNode(Node):
         # `ros2 param set` takes effect at once. In memory mode the gate fixed it.
         self.declare_parameter("map_id", "", startup)
         map_folder = self.declare_parameter("map_folder", "", _READ_ONLY).value
+        objects_topic = self.declare_parameter(
+            "objects_topic", "/walkie_vision/objects", _READ_ONLY
+        ).value
         self.memory_enabled = memory
         self._sim_time = bool(self.get_parameter("use_sim_time").value)
         self.add_on_set_parameters_callback(self._keep_clock)
@@ -186,6 +272,45 @@ class DatabaseNode(Node):
         self.create_service(RememberPerson, "~/remember_person", self.remember_person)
         self.create_service(MatchPeople, "~/match_faces", self.match_faces)
         self.create_service(MatchPeople, "~/match_appearances", self.match_appearances)
+        self.create_service(LocalizeObjects, "~/localize_objects", self.localize_objects)
+        for service_type, name in (
+            (SetObjectState, "set_object_state"),
+            (ReportSighting, "report_sighting"),
+            (ArenaReset, "arena_reset"),
+            (SubmitDetections, "submit_detections"),
+            (DescribeObject, "describe_object"),
+        ):
+            self.create_service(service_type, f"~/{name}", self._not_built)
+        if memory:
+            self._start_observations(objects_topic)
+
+    def _start_observations(self, objects_topic: str) -> None:
+        """Read what never changes while the node runs, then listen for arrays and TF.
+
+        The schema and the map are fixed for the node's life, so a topic callback runs
+        no SQL.
+        """
+        row = self.conn.execute(
+            "SELECT frame_id FROM map WHERE id = ?", (self._map_id_parameter(),)
+        ).fetchone()
+        self._map_frame = row["frame_id"]
+        self._object_models = dict(people.vector_tables(self.conn, OBJECT).lengths)
+        self._observations = ObservationSlot(self._object_models, self._map_frame)
+        self._frames = FrameSource(self.get_clock())
+        self.create_subscription(
+            ObjectDetectionArray, objects_topic, self._on_objects, _OBSERVATION_QOS
+        )
+
+    def _on_objects(self, message: ObjectDetectionArray) -> None:
+        try:
+            now = self._now()
+        except _ClockNotReady:
+            now = None
+        problem = self._observations.receive(message, now)
+        if problem is not None:
+            self.get_logger().warning(
+                f"Refused an array: {problem}", throttle_duration_sec=_REJECTED_LOG_PERIOD_S
+            )
 
     def _read_gate_inputs(self, map_folder: str) -> MapFolder:
         """Check what memory mode needs, before anything is written beside the store."""
@@ -277,6 +402,35 @@ class DatabaseNode(Node):
         if self._waiting_for_clock:
             raise _ClockNotReady("no /clock sample has arrived yet")
         return self.get_clock().now().nanoseconds / 1e9
+
+    def _memory_now(self) -> float:
+        """The clock's time for a service that needs a map, or a NOT_READY refusal."""
+        if not self.memory_enabled:
+            raise Rejected("NOT_READY", "The node runs without memory mode, so it has no map.")
+        try:
+            return self._now()
+        except _ClockNotReady as e:
+            raise Rejected("NOT_READY", f"The node's clock is not ready: {e}.") from None
+
+    def _check_map(self, map_id: str) -> None:
+        """Refuse a request that names another map. An empty name selects the node's."""
+        if map_id and map_id != self._map_id_parameter():
+            raise Rejected(
+                "WRONG_MAP", f"This node serves the map {self._map_id_parameter()}, not {map_id}."
+            )
+
+    def _not_built(self, _request, response):
+        """Answer a write that arrives with the object memory. This reads and keeps nothing."""
+        return _answer(response, "NOT_READY", "This service arrives with the object memory.")
+
+    @_status_handler("localize the objects")
+    def localize_objects(self, request, response) -> None:
+        now = self._memory_now()
+        self._check_map(request.map_id)
+        check_observation(
+            request.objects, models=self._object_models, map_frame=self._map_frame, now=now
+        )
+        response.results = localize(request.objects, map_frame=self._map_frame, frames=self._frames)
 
     def find_objects(
         self, request: FindObjects.Request, response: FindObjects.Response
@@ -475,6 +629,9 @@ class DatabaseNode(Node):
         return response
 
     def destroy_node(self) -> None:
+        if self._frames is not None:
+            self._frames.close()
+            self._frames = None
         if self.conn is not None:
             self.conn.close()
         # After the close, which is the store's last write.

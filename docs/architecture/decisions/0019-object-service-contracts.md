@@ -1,7 +1,7 @@
 # ADR-0019: Freeze the object services in new types, pinned to walkie-vision
 
 <!-- --8<-- [start:body] -->
-**Status:** Accepted · **Date:** 2026-11-05
+**Status:** Accepted · **Date:** 2026-11-05 · The handlers land in stages: [The object contract](/architecture/database.md#the-object-contract) says what is served
 
 **Context**
 
