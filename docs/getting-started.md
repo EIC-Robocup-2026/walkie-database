@@ -128,6 +128,10 @@ house's map, `demo-house`:
 pixi run db-node --ros-args -p db_path:=data/demo.db -p map_id:=demo-house
 ```
 
+This is the demo, with `memory_enabled` false. A real store is built by
+[other tools](setup/11-seed-restore-and-map-gate.md), and memory mode refuses
+`data/demo.db`.
+
 Ask it for every cup:
 
 ```bash title="Terminal 3"

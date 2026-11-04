@@ -64,7 +64,11 @@ pixi run db-browse
 | `pixi run build-msgs` | Build `walkie_vision_msgs` and the node's own messages and services, `walkie_database_msgs`, in `ros2_ws/` with colcon. |
 | `pixi run db-node`    | Run the database node. It owns and writes `data/walkie.db`.         |
 | `pixi run db-shell`   | Open `data/walkie.db` read-only in `sqlite3`, with sqlite-vec loaded. |
-| `pixi run db-seed`    | Write a sample house, people and conversation to `data/demo.db`. Never touches `walkie.db`. |
+| `pixi run db-seed`    | Write a made-up sample house, people and conversation to `data/demo.db`. Never touches `walkie.db`, and is not a store's seed. |
+| `pixi run db-memory`  | Run the node on a seeded store, gated on its map. Append `-p db_path:=`, `-p map_folder:=` and `-p map_id:=`. |
+| `pixi run db-seed-store` | Build a store's seed from reviewed room, anchor and catalogue files. Every path is an argument. |
+| `pixi run db-seed-sim` | Build a seed from a sim world's authoring file, a locations file and a room-names file. |
+| `pixi run db-restore` | Reset a stopped store to a seed, keeping its ID lineage. |
 | `pixi run db-browse`  | Browse every database in `data/` read-only at <http://127.0.0.1:8001>. |
 | `pixi run test`       | Run the tests. They use throwaway databases and need no robot.      |
 | `pixi run docs`       | Serve the documentation at <http://127.0.0.1:8000>.                 |
@@ -82,13 +86,17 @@ pixi run db-browse
 | `src/walkie_database/migrate.py`    | Applies the schema migrations                             |
 | `src/walkie_database/migrations/`   | The schema, as numbered SQL files                         |
 | `src/walkie_database/seed.py`       | The sample data that `db-seed` writes                     |
-| `src/walkie_database/map_config.py` | Reads a map YAML and its image for the map digest         |
+| `src/walkie_database/map_config.py` | Reads a map folder for its digest, and checks a store against it (the map gate) |
+| `src/walkie_database/seed_store.py` | Builds a store's seed from reviewed files                 |
+| `src/walkie_database/seed_sim.py`   | Adapts a sim world's files into `seed_store`              |
+| `src/walkie_database/restore.py`    | Resets a stopped store to a seed                          |
+| `src/walkie_database/store_lock.py` | The store's exclusive lock and its atomic replacement     |
 | `src/walkie_map_id.py`              | The canonical map digest. Other repositories use this exact file |
 | `ros2_ws/src/walkie_database_msgs/` | The node's messages and services, built by `build-msgs`   |
 | `ros2_ws.repos`                     | The walkie-vision commit whose messages this repository nests |
 | `tools/import_interfaces.py`        | Clones that commit into `ros2_ws/src/walkie-vision`, which Git ignores |
 | `scripts/activate.sh`               | Adds the `build-msgs` output to every `pixi run`          |
 | `datasette-plugins/`                | Datasette plugins for `db-browse`                         |
-| `tests/`                            | Tests for the connection, migrations, schema, node, people, sample data, interfaces and map identity |
+| `tests/`                            | Tests for the connection, migrations, schema, node, people, sample data, interfaces, map identity, seeds, restore and the map gate |
 | `data/`                             | The database files. Not in Git.                           |
 | `docs/`                             | The documentation site (MkDocs)                           |

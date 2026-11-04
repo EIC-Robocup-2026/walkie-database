@@ -30,6 +30,9 @@ Wrote data/demo.db: 3 rooms, 12 objects, 4 people and 11 messages. Browse it wit
 `src/walkie_database/seed.py` deletes `data/demo.db` and writes it again
 from the newest schema, so it always matches the code.
 
+This is the demo tool. It is separate from the tools that build a real store's seed
+([step 11](11-seed-restore-and-map-gate.md)), and memory mode refuses `data/demo.db`.
+
 !!! danger "Sample data never goes into `data/walkie.db`"
     The robot searches everything in its memory. A made-up guest or coke
     can in `walkie.db` would be found by real searches, and the robot would

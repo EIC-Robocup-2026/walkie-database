@@ -24,19 +24,38 @@ processes read through its topics and services:
     nearest first (ADR-0018).
 
 The node keeps no session state in memory: it is all in the file.
+
+It holds the store's lock (``<db_path>.lock``) for its whole life, so a second
+node or an offline tool on the same file refuses to start (ADR-0023).
+
+With ``memory_enabled`` false, the default, it runs as it always has: it needs no
+map, and it creates the file at ``db_path`` if needed. With ``memory_enabled`` true
+it passes the map gate first. ``db_path``, ``map_folder`` and ``map_id`` are
+required and read-only, and the store's map row, full digest, baseline and clock
+must match them and ``use_sim_time``. A mismatch stops the start before any service
+exists. A seeded store's anchors are stamped once, on the first clock sample.
+
+Every start commits a new ``store_id``. Timestamps come from the node's clock, so
+in a simulation they are sim time.
 """
 
 from __future__ import annotations
 
 import math
 import sqlite3
-import time
+import uuid
+from contextlib import closing
+from pathlib import Path
 
 import rclpy
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Point, Quaternion, Vector3
+from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rosgraph_msgs.msg import Clock
 from walkie_database_msgs.msg import Fact, ModelInfo, PersonMatch, PersonMatches, RememberedObject
 from walkie_database_msgs.srv import (
     EndSession,
@@ -47,8 +66,17 @@ from walkie_database_msgs.srv import (
 )
 
 from walkie_database import people
-from walkie_database.db import connect
+from walkie_database.db import connect, transaction
+from walkie_database.map_config import (
+    ROS_SIM,
+    WALL,
+    MapFolder,
+    MapGateError,
+    check_store,
+    read_map_folder,
+)
 from walkie_database.migrate import migrate
+from walkie_database.store_lock import StoreLock, StoreLocked
 
 # max_results of FindObjects and MatchPeople when the caller sends 0, and the
 # most it may ask for. The node runs one callback at a time, so a search must
@@ -63,7 +91,8 @@ _UINT32_MAX = 2**32 - 1
 
 # Every position query filters by map (ADR-0008). An empty label matches
 # every object. COLLATE NOCASE compares ASCII letters ignoring case, so "Cup"
-# finds "cup".
+# finds "cup". RememberedObject has a position and no state, so a seeded anchor
+# with no measured box, or a tombstone, would read as an object at the origin.
 _FIND_OBJECTS_SQL = """
 SELECT o.id, o.label, o.caption, o.map_id, m.frame_id,
        o.center_x, o.center_y, o.center_z, o.qx, o.qy, o.qz, o.qw,
@@ -72,25 +101,68 @@ FROM object AS o
 JOIN map AS m ON m.id = o.map_id
 LEFT JOIN room AS r ON r.id = o.room_id
 WHERE o.map_id = :map_id
+  AND o.geometry_valid = 1
+  AND o.state NOT IN ('discarded', 'merged')
   AND (:label = '' OR o.label = :label COLLATE NOCASE)
 ORDER BY o.last_seen DESC
 LIMIT :limit
 """
 
+_READ_ONLY = ParameterDescriptor(read_only=True)
+# As rclpy's TimeSource subscribes, which any /clock publisher can reach.
+_CLOCK_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+
+
+class _ClockNotReady(ValueError):
+    """Use_sim_time is on, and no /clock sample has arrived."""
+
 
 class DatabaseNode(Node):
     def __init__(self, **kwargs) -> None:
         super().__init__("walkie_database", **kwargs)
-        self.db_path = self.declare_parameter("db_path", "data/walkie.db").value
-        # The map the robot is using (map.id), for requests that name none.
-        # find_objects reads it on every request, so `ros2 param set` takes
-        # effect at once.
-        self.declare_parameter("map_id", "")
         # Use this connection only from the executor's thread. sqlite3
         # connections refuse calls from other threads by default.
+        self.conn: sqlite3.Connection | None = None
+        self._store_lock: StoreLock | None = None
+        self._first_clock = None
+        self._waiting_for_clock = False
+        self._refresh_pending = False
+        # The snapshot's sequence starts at zero for each store_id.
+        self.publication_sequence = 0
+        try:
+            self._start()
+        except BaseException:
+            self.destroy_node()
+            raise
+
+    def _start(self) -> None:
+        memory = self.declare_parameter("memory_enabled", False, _READ_ONLY).value
+        startup = _READ_ONLY if memory else ParameterDescriptor()
+        # Memory mode has no default store, so it never opens the owner's by accident.
+        self.db_path = self.declare_parameter(
+            "db_path", "" if memory else "data/walkie.db", startup
+        ).value
+        # The map the robot is using (map.id), for requests that name none.
+        # find_objects reads it on every request. Without memory mode,
+        # `ros2 param set` takes effect at once. In memory mode the gate fixed it.
+        self.declare_parameter("map_id", "", startup)
+        map_folder = self.declare_parameter("map_folder", "", _READ_ONLY).value
+        self.memory_enabled = memory
+        self._sim_time = bool(self.get_parameter("use_sim_time").value)
+        self.add_on_set_parameters_callback(self._keep_clock)
+
+        folder = self._read_gate_inputs(map_folder) if memory else None
+        self._store_lock = StoreLock(self.db_path)
+        self._store_lock.acquire()
+        if folder is not None:
+            self._check_map_gate(folder)
         self.conn = connect(self.db_path)
         version = migrate(self.conn)
         self.get_logger().info(f"Opened {self.db_path} at schema version {version}")
+        # A store with no store_meta row, as the old people-only files, has none to change.
+        with transaction(self.conn):
+            self.conn.execute("UPDATE store_meta SET store_id = ?", (str(uuid.uuid4()),))
+        self._start_clock()
         map_id = self._map_id_parameter()
         if map_id and not self._map_exists(map_id):
             self.get_logger().warning(
@@ -114,6 +186,97 @@ class DatabaseNode(Node):
         self.create_service(RememberPerson, "~/remember_person", self.remember_person)
         self.create_service(MatchPeople, "~/match_faces", self.match_faces)
         self.create_service(MatchPeople, "~/match_appearances", self.match_appearances)
+
+    def _read_gate_inputs(self, map_folder: str) -> MapFolder:
+        """Check what memory mode needs, before anything is written beside the store."""
+        values = {"db_path": self.db_path, "map_folder": map_folder, "map_id": self._map_id_parameter()}
+        missing = [name for name, value in values.items() if not value]
+        if missing:
+            raise MapGateError(f"Memory mode needs the parameters {', '.join(missing)}.")
+        folder = read_map_folder(map_folder)
+        if not Path(self.db_path).is_file():
+            raise MapGateError(
+                f"{self.db_path} does not exist, and memory mode never creates a store. "
+                "Restore a seed to it first."
+            )
+        return folder
+
+    def _check_map_gate(self, folder: MapFolder) -> None:
+        """Refuse a store of another map or clock. This only reads, so a refused store stays as it was."""
+        clock_kind = ROS_SIM if self._sim_time else WALL
+        try:
+            with closing(connect(self.db_path, readonly=True)) as conn:
+                check_store(conn, folder, clock_kind, self._map_id_parameter())
+        except sqlite3.DatabaseError as e:
+            raise MapGateError(f"{self.db_path} cannot be read: {e}") from e
+
+    def _keep_clock(self, parameters: list[Parameter]) -> SetParametersResult:
+        """Refuse a clock change. The store's times must all come from one clock."""
+        for parameter in parameters:
+            if parameter.name == "use_sim_time" and bool(parameter.value) != self._sim_time:
+                return SetParametersResult(
+                    successful=False, reason="The node's clock is fixed at start-up."
+                )
+        return SetParametersResult(successful=True)
+
+    def _start_clock(self) -> None:
+        """Stamp a seeded store's anchors now, or wait for the first /clock sample.
+
+        The refresh runs once per seed or restore. A later start, also after a
+        crash, finds the flag clear and leaves the times alone, so that a reboot
+        does not make stale anchors look fresh.
+
+        This subscribes separately from rclpy's own clock. rclpy's reads 0 both
+        before a sample and for a sample at time 0, and a sim may sit at 0.
+        """
+        if self.memory_enabled:
+            row = self.conn.execute("SELECT refresh_anchors_pending FROM store_meta").fetchone()
+            self._refresh_pending = bool(row["refresh_anchors_pending"])
+        if self._sim_time:
+            self._waiting_for_clock = True
+            self._first_clock = self.create_subscription(
+                Clock, "/clock", self._on_first_clock, _CLOCK_QOS
+            )
+        elif self._refresh_pending:
+            self._stamp_seeded_anchors(self._now())
+
+    def _on_first_clock(self, message: Clock) -> None:
+        try:
+            if self._refresh_pending:
+                self._stamp_seeded_anchors(message.clock.sec + message.clock.nanosec / 1e9)
+        except sqlite3.Error as e:
+            # An exception here would stop the node. The next sample tries again.
+            self.get_logger().error(f"Could not stamp the seeded anchors: {e}")
+            return
+        # rclpy's own subscription may not have this sample yet, and _now must not read 0.
+        self.get_clock().set_ros_time_override(rclpy.time.Time.from_msg(message.clock))
+        self._waiting_for_clock = False
+        self.destroy_subscription(self._first_clock)
+        self._first_clock = None
+
+    def _stamp_seeded_anchors(self, now: float) -> None:
+        """Stamp the anchors and clear the flag together, in one transaction."""
+        with transaction(self.conn):
+            self.conn.execute(
+                """UPDATE object SET first_seen = :now, last_seen = :now, last_verified = :now
+                   WHERE layer = 'anchor' AND source = 'map'
+                     AND state NOT IN ('discarded', 'merged')""",
+                {"now": now},
+            )
+            self.conn.execute("UPDATE store_meta SET refresh_anchors_pending = 0")
+        self._refresh_pending = False
+        self.get_logger().info(f"Stamped the seeded anchors at {now:.3f}.")
+
+    def _now(self) -> float:
+        """Seconds on the node's clock: wall time, or /clock with use_sim_time.
+
+        Raises ValueError before the first sample, which callers report as a
+        database failure, because the same request may work later. A time of 0
+        would claim that this happened at the start of the sim.
+        """
+        if self._waiting_for_clock:
+            raise _ClockNotReady("no /clock sample has arrived yet")
+        return self.get_clock().now().nanoseconds / 1e9
 
     def find_objects(
         self, request: FindObjects.Request, response: FindObjects.Response
@@ -163,7 +326,7 @@ class DatabaseNode(Node):
     ) -> StartSession.Response:
         try:
             started = people.start_session(
-                self.conn, request.label, request.resume, time.time()
+                self.conn, request.label, request.resume, self._now()
             )
             started_at = _time(started.started_at, f"session {started.id} has started_at")
             models = {kind: people.vector_tables(self.conn, kind) for kind in people.KINDS}
@@ -222,7 +385,7 @@ class DatabaseNode(Node):
                 [(f.key, f.value) for f in request.facts],
                 [(v.model, v.embedding) for v in request.faces],
                 [(v.model, v.embedding) for v in request.appearances],
-                time.time(),
+                self._now(),
             )
         except people.Refused as e:
             return self._refused(response, "remember_person", e)
@@ -312,7 +475,11 @@ class DatabaseNode(Node):
         return response
 
     def destroy_node(self) -> None:
-        self.conn.close()
+        if self.conn is not None:
+            self.conn.close()
+        # After the close, which is the store's last write.
+        if self._store_lock is not None:
+            self._store_lock.release()
         super().destroy_node()
 
     def _map_id_parameter(self) -> str:
@@ -403,7 +570,12 @@ def _time(seconds: float, what: str) -> Time:
 
 def main() -> None:
     rclpy.init()
-    node = DatabaseNode()
+    try:
+        node = DatabaseNode()
+    except (MapGateError, StoreLocked) as e:
+        rclpy.logging.get_logger("walkie_database").fatal(f"Not starting: {e}")
+        rclpy.try_shutdown()
+        raise SystemExit(1) from None
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

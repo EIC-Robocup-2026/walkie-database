@@ -110,6 +110,26 @@ description = "Run the test suite"
 cmd = "python -m walkie_database.node"
 description = "Run the database node (opens data/walkie.db and updates its schema)"
 
+# Map-gated memory mode. It has no defaults on purpose. Callers append
+# -p db_path:=PATH -p map_folder:=PATH -p map_id:=ID, and -p use_sim_time:=true
+# on a ros_sim store. A store that does not match stops the start.
+[tasks.db-memory]
+cmd = "python -m walkie_database.node --ros-args -p memory_enabled:=true"
+description = "Run the database node on a seeded store, gated on its map (append db_path, map_folder and map_id)"
+
+# These three write only the paths they are given, and take no defaults.
+[tasks.db-seed-store]
+cmd = "python -m walkie_database.seed_store"
+description = "Build a store's seed from reviewed room, anchor and catalogue files"
+
+[tasks.db-seed-sim]
+cmd = "python -m walkie_database.seed_sim"
+description = "Build a store's seed from a sim world's authoring file and a locations file"
+
+[tasks.db-restore]
+cmd = "python -m walkie_database.restore"
+description = "Reset a stopped store to a seed, keeping its ID lineage"
+
 # -readonly so a look around cannot change the file while the node runs.
 # The .load line adds sqlite-vec, without which vec0 tables cannot be read.
 [tasks.db-shell]
@@ -151,7 +171,7 @@ description = "Browse every database in data/ read-only in a web browser, at htt
 
 [tasks.db-seed]
 cmd = "python -m walkie_database.seed"
-description = "Fill data/demo.db with a sample house, people and conversation (never data/walkie.db)"
+description = "Fill data/demo.db with a made-up sample house, people and conversation (the demo, not a store's seed)"
 
 [environments]
 docs = { features = ["docs"], no-default-feature = true }

@@ -33,7 +33,8 @@ answer, and must not write twice.
   the payload, and a bounded JSON outcome. The same id with another operation or
   payload is refused.
 - The ledger lasts for one store lineage. A node restart and a new `store_id` keep
-  it. The offline seed restore is to clear it, and is not built yet.
+  it. The offline restore clears it
+  ([ADR-0023](/architecture/decisions/0023-offline-restore-and-map-gate.md)).
 - Canonical JSON has sorted keys and no spaces, and refuses NaN, bytes and anything
   that is not JSON. A string is at most 1,024 characters and an array at most 64
   items, which keeps a vector, a crop or a mask out of the ledger.

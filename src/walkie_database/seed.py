@@ -3,6 +3,10 @@
 The data is made up, so it never goes into the robot's memory: :func:`main`
 writes only ``data/demo.db``, and recreates it on every run.
 
+This is the demo tool, and it stays separate from the store's seed tools. It has no
+map digest, so a node in memory mode refuses its file. A real seed comes from
+``walkie_database.seed_store`` and goes into a store with ``walkie_database.restore``.
+
 The vectors are random, but objects with the same label, and the faces of the
 same person, get vectors close to each other. Vector searches therefore give
 sensible answers: the nearest object to a cup is the other cup.

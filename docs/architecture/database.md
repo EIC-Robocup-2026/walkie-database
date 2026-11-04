@@ -57,14 +57,19 @@ them by meaning, by position and by words.
 - **The task's log forgets with the session.** A line that names a person goes
   with that person's session, and is not left with an empty link
   ([ADR-0022](decisions/0022-task-event-log.md)).
+- **A store starts from a seed, and the node checks it.** Offline tools build and
+  restore a stopped store, under its lock. In memory mode, the node refuses to start
+  on the wrong map, digest, baseline or clock
+  ([ADR-0023](decisions/0023-offline-restore-and-map-gate.md)).
 
 ## The parts
 
 !!! note "Proposed"
     Today the node opens the file, migrates it, and answers `find_objects`
     and the people and session services
-    ([The node's interface](#the-nodes-interface)). The other topics and
-    services below are the plan, starting with
+    ([The node's interface](#the-nodes-interface)). Offline tools build and restore
+    a store ([Seeds, restore and the map gate](#seeds-restore-and-the-map-gate)). The
+    other topics and services below are the plan, starting with
     [object memory](object-memory.md).
 
 ```mermaid
@@ -86,9 +91,11 @@ flowchart LR
   shell -.-> db
 ```
 
-The node is the only program that writes the file. `pixi run db-shell` and
+The node is the only program that writes a running store. `pixi run db-shell` and
 other tools may open it read-only, because WAL mode lets them read while
-the node writes.
+the node writes. The seed and restore tools write a store only while no node runs,
+and only under its lock
+([ADR-0023](decisions/0023-offline-restore-and-map-gate.md)).
 
 ## The node's interface
 
@@ -101,8 +108,16 @@ nests, and `pixi run build-msgs` builds both
 
 | Parameter | Default          | What it is                                                                          |
 | --------- | ---------------- | ----------------------------------------------------------------------------------- |
-| `db_path` | `data/walkie.db` | The database file. The node creates it if needed and brings its schema up to date. |
-| `map_id`  | empty            | The map the robot is using (`map.id`). Requests that name no map search this one. On the robot, set it to the map the robot is localized in: while it is empty, every request that names no map fails. The node reads it on every request, so `ros2 param set` changes it at once. |
+| `memory_enabled` | false     | True runs the node in memory mode, behind the [map gate](#the-map-gate). `pixi run db-memory` sets it. Read-only. |
+| `db_path` | `data/walkie.db`, or empty in memory mode | The database file. The node brings its schema up to date. With `memory_enabled` false, it creates the file if needed. In memory mode, the file must already exist. |
+| `map_id`  | empty            | The map the robot is using (`map.id`). Requests that name no map search this one. On the robot, set it to the map the robot is localized in: while it is empty, every request that names no map fails. With `memory_enabled` false, the node reads it on every request, so `ros2 param set` changes it at once. In memory mode it is required and read-only. |
+| `map_folder` | empty         | The folder with `map.yaml`, its image and an optional `manifest.yaml`. Required in memory mode, and ignored otherwise. Read-only. |
+| `use_sim_time` | false       | True makes the node's clock follow `/clock`. It is the store's clock kind: false is `wall` and true is `ros_sim`. It cannot change while the node runs. |
+
+The node holds the store's lock, `<db_path>.lock`, for its whole life. A second node
+or an offline tool on the same file is refused. A refused start logs `Not starting:`
+with the reason, and exits with code 1, before any service exists. Every start commits
+a new `store_id` when the store has a `store_meta` row.
 
 | Service                              | Type                                      | What it does                                               |
 | ------------------------------------ | ----------------------------------------- | ---------------------------------------------------------- |
@@ -162,7 +177,9 @@ Each `RememberedObject` is one row of `object`:
 A request searches exactly one map: the one it names, or else the node's
 `map_id` parameter. Objects in other maps have coordinates in another
 frame, so they are never returned
-([ADR-0008](decisions/0008-coordinates-in-a-named-map.md)). The call fails,
+([ADR-0008](decisions/0008-coordinates-in-a-named-map.md)). A merged or discarded
+object is not returned either, and neither is an anchor with no measured box, because
+this type cannot say that it has none. The call fails,
 with `success` false, in two cases:
 
 - The request and the parameter are both empty. `message` says that the
@@ -225,6 +242,9 @@ stateDiagram-v2
   never forgets a newer session by mistake.
 - Guests stay on disk while the agent is stopped, until the next
   `start_session` without `resume`, or an `end_session`.
+- Times come from the node's clock, so under `use_sim_time` they are sim seconds.
+  Until the first `/clock` sample, `start_session` and `remember_person` fail with
+  the `The database could not` prefix, instead of stamping time zero.
 
 ### `start_session`
 
@@ -496,7 +516,7 @@ erDiagram
 | Table                | One row is                                                                | Notes                                                                           |
 | -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `map`                | A map the robot built, for example `arena-2026-10-19`                     | `frame_id` is the TF frame its coordinates are in, usually `map`. `map_hash`, `baseline_rev` and `clock_kind` identify it ([Map identity](#map-identity)). A map from before migration 0004 has a blank hash. |
-| `store_meta`         | The identity of the active run, in one row                                | `store_id`, `clock_kind` and `map_id`. `refresh_anchors_pending` is 1 when the anchors need seeding again. A map named here cannot be deleted. Nothing writes this table yet. |
+| `store_meta`         | The identity of the active run, in one row                                | `store_id`, `clock_kind` and `map_id`. `refresh_anchors_pending` is 1 until the first clock sample stamps a seed's anchors. A map named here cannot be deleted. The seed and restore tools write this row, and every node start gives it a new `store_id`. |
 | `session`            | One run of a task, for example one Receptionist attempt                   | At most one is open (`ended_at` NULL): the session the agent is in. Migration 0003's `session_one_open` index refuses a second. |
 | `last_id`            | The largest id ever given in `session`, in `person` and in `object`       | The node gives a new session or person the next id, so no id is given twice. Object ids are reserved from it in blocks ([Object ids and tombstones](#object-ids-and-tombstones)). Triggers keep it up to date. |
 | `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room. `name` is for display and `key` for requests ([Rooms, surfaces and relations](#rooms-surfaces-and-relations)). |
@@ -635,7 +655,7 @@ an image, a crop or an embedding, and the size limits refuse them. The outcome h
 ids and statuses only, because forgetting a session does not touch this table.
 
 The table lives as long as the store. A node restart or a new `store_id` keeps it.
-The offline seed restore is to clear it, and is not built yet. Nothing calls these
+The [offline restore](#restore-a-stopped-store) clears it. Nothing calls these
 helpers from the node yet.
 
 ### The search indexes
@@ -890,13 +910,15 @@ All three raise `ValueError` on anything else.
 | `0` or `0.0` or `-0.0`                             | A new algorithm version                      |
 | Another `maxval` that normalizes to the same samples |                                            |
 
-!!! warning "The helper exists, the gate does not"
-    The node still accepts any `map_id` string, and only warns when the map is
-    not in the `map` table. The startup gate and the seed tools come later.
+!!! warning "The gate runs only in memory mode"
+    With `memory_enabled` false, the default, the node still accepts any `map_id`
+    string, and only warns when the map is not in the `map` table. In memory mode
+    it passes [the map gate](#the-map-gate) first.
 
 `walkie_database.map_config` holds this repository's YAML side.
 `digest_map_files(path)` reads a map YAML and the image it names, and
 `parse_map_yaml(text)` rejects malformed YAML, repeated keys and merge keys.
+`read_map_folder(path)` reads a whole map folder, and `check_store(...)` is the gate.
 `walkie_map_id` itself never parses YAML, which is why it has no dependencies.
 
 ### Use it from another repository
@@ -916,12 +938,252 @@ each has a `pgm_hex`, a `metadata`, the decoded samples, and the `digest` and
 script computed them by hand, without importing this module. This repository only
 runs the module on Python 3.12.
 
+## Seeds, restore and the map gate
+
+A store in memory mode starts from a seed. A seed is a closed file that holds one
+map and what was reviewed about it. Nothing else may be in it: no L3 objects, people,
+sessions, conversations, events, observation histories or request ledger
+([ADR-0023](decisions/0023-offline-restore-and-map-gate.md)).
+
+```mermaid
+flowchart LR
+  inputs["Map folder, rooms,<br/>anchors, catalogue"]
+  seed[("Seed")]
+  store[("Store")]
+  node["Node in memory mode"]
+  inputs -- "db-seed-store<br/>db-seed-sim" --> seed
+  seed -- "db-restore<br/>(node stopped)" --> store
+  store -- "map gate" --> node
+```
+
+Every path is an explicit argument, and no tool writes to `data/` unless told to.
+`db-seed` is separate. It is the made-up demo in `data/demo.db`, and memory mode
+refuses that file.
+
+### Build a seed
+
+```bash
+pixi run db-seed-store --map-folder PATH --arena NAME --date YYYY-MM-DD \
+    --rooms PATH --anchors PATH --catalogue PATH --clock-kind wall|ros_sim \
+    --output PATH [--previous-seed PATH] [--replace]
+
+pixi run db-seed-sim --map-folder PATH --arena NAME --date YYYY-MM-DD \
+    --world-source PATH --locations PATH --room-names PATH \
+    --clock-kind wall|ros_sim --output PATH \
+    [--anchors PATH] [--catalogue PATH] [--previous-seed PATH] [--replace]
+```
+
+The map ID is computed as `<arena>-<date>-<first 8 of the digest>`, never given.
+
+- **Everything is checked first.** All inputs are read and checked before the output
+  is created, so a bad input writes nothing. Each stand pose must lie inside its room,
+  and every anchor must name a listed room.
+- **The same inputs give the same rows.** `created_at` comes from `--date`, and rows
+  are written in sorted order. Room IDs follow the sorted keys, so they can change
+  between seeds. Only anchor IDs are stable.
+- **A reseed keeps its anchors' IDs.** With `--previous-seed`, a repeated key keeps
+  its ID and a removed key becomes a tombstone. A new key gets an ID above every ID
+  used before.
+- **`--replace` replaces only a seed.** A file with no `store_meta` row, or one with
+  people or live objects in it, is refused. A seed of the same map also needs
+  `--previous-seed`, so that its IDs are not lost.
+- **No fallback.** Nothing turns a stand pose or a flat polygon into a box, and no
+  tool makes up a coordinate or a vector.
+
+`db-seed-sim` is an adapter. It reads room keys and outlines from a sim world's
+authoring file, and prints the normalized rooms as JSON. It then calls the same code
+as `db-seed-store`. [Sim Harvest Support](harvest.md#the-sim-seed) has its details.
+
+### The input files
+
+Each is YAML or JSON. Room, anchor and surface keys match `[a-z][a-z0-9_]{0,63}`.
+Write numbers as plain decimals. PyYAML reads `1e3` as a string, and the tools refuse
+it.
+
+The rooms file. A seed needs at least one room, and every field is required:
+
+```yaml
+schema_version: 1
+map_id: arena-2026-11-05-1a2b3c4d
+rooms:
+  - key: living_room
+    name: living room
+    description: A sofa and a low table.
+    floor: 0
+    polygon: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]
+    stand_pose: [1.0, 1.0, 0.0]   # x, y, yaw, inside the polygon
+```
+
+The anchors file. For a rooms-only seed, use an empty `anchors` list:
+
+```yaml
+schema_version: 1
+map_id: arena-2026-11-05-1a2b3c4d
+baseline_rev: ""
+anchors:
+  - key: table
+    label: table
+    room_key: living_room
+    geometry_valid: true
+    enclosed: false
+    center: [2.0, 2.0, 0.4]       # all three required when geometry_valid is true
+    size: [1.0, 0.5, 0.8]
+    yaw: 0.0
+    surfaces:
+      - key: table_top
+        z: 0.8
+        outline: [[1.5, 1.75], [2.5, 1.75], [2.5, 2.25], [1.5, 2.25]]
+  - key: wardrobe                 # known by name, with nothing measured
+    label: wardrobe
+    room_key: living_room
+    geometry_valid: false         # gives no center, size or yaw
+    enclosed: true
+    surfaces: []
+```
+
+An anchor may also have a `fingerprint`, from a real crop: `model`, `dimension`,
+`embedding` and `provenance` with `weights_sha256` and `crop_sha256`. The tool checks
+its form and runs no model, so it cannot prove the hashes honest. The reviewer of the
+file does that.
+
+The catalogue file. Only `official_name` is required in an entry. For a rooms-only
+seed, use an empty `objects` list:
+
+```yaml
+schema_version: 1
+objects:
+  - official_name: blue cup
+    category: cup
+    aliases: [mug]
+    default_place: table
+    weight_g: 250.0
+    attributes: {colour: blue, fragile: true}
+```
+
+Attributes use a closed vocabulary, and anything else is refused:
+
+| Attribute            | Values                                                          |
+| -------------------- | --------------------------------------------------------------- |
+| `colour`             | `black`, `white`, `grey`, `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `pink`, `brown`, `beige` |
+| `material`           | `metal`, `plastic`, `glass`, `ceramic`, `wood`, `paper`, `cardboard`, `fabric`, `rubber` |
+| `shape`              | `round`, `rectangular`, `cylindrical`, `irregular`              |
+| `size`               | `small`, `medium`, `large`                                      |
+| `fragile`, `container` | `true` or `false`                                             |
+
+`db-seed-sim` needs two more. The room-names file gives each of the world's room keys
+a display name, and lists every room and no others:
+
+```yaml
+schema_version: 1
+rooms:
+  living_room: living room
+  kitchen_room: kitchen room
+```
+
+The locations file is TOML, with a stand pose under exactly each display name. Other
+locations are ignored:
+
+```toml
+[locations."living room"]
+x = 1.0
+y = 1.0
+yaw = 0.5
+description = "A sofa and a low table."
+```
+
+### Restore a stopped store
+
+```bash
+pixi run db-restore --seed PATH --db PATH --map-folder PATH --clock-kind wall|ros_sim --replace
+```
+
+`--replace` is required, because the tool's only job is to replace a store. A restored
+store is the seed's rows with new run metadata. It is not a copy of the seed's bytes:
+
+- It has a fresh `store_id`.
+- It carries the larger of each `object`, `person` and `session` counter, from the
+  outgoing store and the seed. So an ID is never given twice in one store's lineage
+  ([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)).
+- It has `refresh_anchors_pending` set, so the node stamps the anchors once.
+- It has no people, events or request ledger. A retry from before the restore starts
+  over.
+
+The order is what keeps it safe. The tool takes the lock, and checks the seed against
+the map folder and the clock. It checkpoints the outgoing store's WAL, because a
+killed node's last counters may be only there, and reads them. It writes a temporary
+copy beside the target and syncs it. Only then does it remove the old `-wal` and
+`-shm`, and rename the copy over the target. A crash before the rename leaves the old
+store usable, and a crash after it leaves a complete new one.
+
+It refuses a held lock, a seed of another map or clock, a seed at an older schema, or
+a seed with anything a seed may not hold. The outgoing store stays as it is when it
+has another map or clock, when it is too new, when it has no `store_meta` row, or
+when it is not a database at all. A `-wal` with no store beside it is refused too.
+
+### The map gate
+
+`pixi run db-memory` starts the node with `memory_enabled` true. Callers append the
+rest:
+
+```bash
+pixi run db-memory -p db_path:=PATH -p map_folder:=PATH -p map_id:=ID [-p use_sim_time:=true]
+```
+
+It refuses to start, before any service exists, unless all of these hold:
+
+| Check | Refused when |
+| ----- | ------------ |
+| Parameters | `db_path`, `map_folder` or `map_id` is empty. They have no defaults. |
+| The file | It does not exist. Memory mode never creates a store. |
+| The lock | Another node or tool holds `<db_path>.lock`. |
+| The map ID | `store_meta` and `map_id` name different maps, or the store has no such map row. |
+| The digest | The store's **full** `map_hash` is blank, or differs from the digest of `map.yaml` and its image, or the map ID does not end with its first 8 characters. Those 8 characters alone are not enough. |
+| The frame | The map's `frame_id` is not `map`. |
+| The clock | The store's `clock_kind` is not `ros_sim` under `use_sim_time`, or `wall` otherwise. |
+| The baseline | See below. |
+
+The baseline comes from an optional `manifest.yaml` at the top of the map folder, with
+the keys `map_id`, `baseline_rev` and `map_hash`:
+
+| Manifest | Store's `baseline_rev` | Result |
+| -------- | ---------------------- | ------ |
+| None | Empty | Valid: no baseline. A missing baseline is not a missing map. |
+| None | Set | Refused |
+| Present | Equal to the manifest's | Valid, when the manifest's map and digest match too |
+| Present | Different, or empty | Refused. A rooms-only seed must be rebuilt once a baseline exists. |
+
+With `memory_enabled` false, none of this runs. The node needs no map, creates its
+file if needed, keeps the old people services and `find_objects`, and cannot ingest
+detections. Memory tests must not use it to get past the gate.
+
+### The clock and the anchors' first stamp
+
+The node's clock is the store's clock. A seed or restore sets
+`refresh_anchors_pending`. On a `wall` store, the node stamps the anchors as it
+starts. On a `ros_sim` store, it waits for the first `/clock` sample, also one at
+time zero. That stamp sets `first_seen`, `last_seen` and `last_verified` on each live
+anchor and clears the flag in one transaction. If it fails, the next sample tries
+again. A tombstone is not stamped, and the object revision does not change.
+
+A later start finds the flag clear, and leaves the times alone. So a reboot does not
+make an old anchor look freshly seen.
+
+### What this does not catch
+
+- A store's map row is compared with the files in `map_folder`. Nothing checks that
+  the robot is localized in that map.
+- An anchor's center is not checked against its room's outline.
+- A polygon whose edges cross is not detected.
+- `flock` is reliable on a local disk only. Do not keep a store on NFS.
+
 ## What lives where
 
 | What                              | Where                                       | In Git |
 | --------------------------------- | ------------------------------------------- | ------ |
 | The memory                        | `data/walkie.db`, plus `-wal` and `-shm` files next to it while the node runs | No |
-| Sample data, for learning and demos | `data/demo.db`, written by `pixi run db-seed` ([setup step 6](../setup/06-sample-data-and-browser.md)) | No |
+| The store's lock                  | `<db_path>.lock`, next to the store. It is never deleted, and it is empty. | No |
+| A store's seed                    | Wherever `--output` says                    | No     |
+| Sample data, for learning and demos | `data/demo.db`, written by `pixi run db-seed` ([setup step 6](../setup/06-sample-data-and-browser.md)). It is not a store's seed. | No |
 | Images of detections and faces    | Files on disk. The database keeps their path in `crop_path` | No |
 | Raw detections, for re-tuning     | A `ros2 bag` of the detection topic ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)) | No |
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |
@@ -929,6 +1191,10 @@ runs the module on Python 3.12.
 | Object ids, rows and tombstones   | `src/walkie_database/objects.py`            | Yes    |
 | Rooms, surfaces, the catalogue, relations, the log and retried writes | `src/walkie_database/object_context.py` | Yes |
 | The map identity helper           | `src/walkie_map_id.py`                      | Yes    |
+| The map folder and the gate       | `src/walkie_database/map_config.py`         | Yes    |
+| The seed tools                    | `src/walkie_database/seed_store.py`, `seed_sim.py` | Yes |
+| The restore tool                  | `src/walkie_database/restore.py`            | Yes    |
+| The lock and the atomic install   | `src/walkie_database/store_lock.py`         | Yes    |
 | The node's messages and services  | `ros2_ws/src/walkie_database_msgs/`         | Yes    |
 | The walkie-vision commit they nest | `ros2_ws.repos`                            | Yes    |
 | The clone of that commit          | `ros2_ws/src/walkie-vision/`, written by `pixi run import-interfaces` | No |
@@ -1022,3 +1288,7 @@ The sim harvest decision, ADR-0016, is on the
 ??? note "ADR-0022: Keep a task log, and forget its person-linked lines with the session · Proposed"
 
     --8<-- "architecture/decisions/0022-task-event-log.md:body"
+
+??? note "ADR-0023: Restore a stopped store offline, and gate the node on its map · Proposed"
+
+    --8<-- "architecture/decisions/0023-offline-restore-and-map-gate.md:body"

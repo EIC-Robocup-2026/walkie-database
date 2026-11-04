@@ -92,6 +92,7 @@ nav:
       - 8. Add the Message Package: setup/08-message-package.md
       - 9. Add the People and Session Services: setup/09-people-services.md
       - 10. Pin Vision and Freeze the Object Interfaces: setup/10-object-interfaces.md
+      - 11. Seed Tools, Restore and the Map Gate: setup/11-seed-restore-and-map-gate.md
   - Architecture:
       - architecture/index.md
       - The Database: architecture/database.md

@@ -1,7 +1,7 @@
 # ADR-0020: Identify a map by its pixels and metadata, and keep seed lineage
 
 <!-- --8<-- [start:body] -->
-**Status:** Accepted · **Date:** 2026-11-05
+**Status:** Accepted · **Date:** 2026-11-05 · The gate and the seed tools are built by [ADR-0023](/architecture/decisions/0023-offline-restore-and-map-gate.md)
 
 **Context**
 

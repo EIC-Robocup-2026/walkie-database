@@ -50,7 +50,7 @@ def _integrity_as_refused() -> Iterator[None]:
         raise Refused(str(error)) from None
 
 
-def _open_ring(outline: Sequence[Sequence[float]], where: str) -> list[list[float]]:
+def open_ring(outline: Sequence[Sequence[float]], where: str) -> list[list[float]]:
     """*outline* as corners with no repeated last corner, or Refused.
 
     It needs three corners and some area. Crossing edges are not detected.
@@ -83,7 +83,7 @@ def set_room_shape(
     require_transaction(conn, "set_room_shape")
     if conn.execute("SELECT 1 FROM room WHERE id = ?", (room_id,)).fetchone() is None:
         raise Refused(f"Room {room_id} does not exist.")
-    points = _open_ring(outline, f"The outline of room {room_id}")
+    points = open_ring(outline, f"The outline of room {room_id}")
     conn.execute("DELETE FROM room_shape WHERE rowid = ?", (room_id,))
     conn.execute(
         "INSERT INTO room_shape (rowid, _shape) VALUES (?, geopoly_ccw(?))",
@@ -144,7 +144,7 @@ def add_surface(
         raise Refused("A surface needs a key.")
     if not math.isfinite(z):
         raise Refused(f"Surface {key} has a NaN or infinite height.")
-    points = _open_ring(outline, f"The outline of surface {key}") if geometry_valid or outline else []
+    points = open_ring(outline, f"The outline of surface {key}") if geometry_valid or outline else []
     row = conn.execute("SELECT map_id FROM object WHERE id = ?", (anchor_id,)).fetchone()
     if row is None:
         raise Refused(f"Object {anchor_id} does not exist.")
@@ -170,6 +170,33 @@ def usable_surfaces(conn: sqlite3.Connection, anchor_id: int) -> list[sqlite3.Ro
 
 
 # Catalogue -------------------------------------------------------------------
+
+# The fixed vocabulary of an attribute. A missing key means unknown, never guessed.
+ATTRIBUTE_VALUES = {
+    "colour": ("black", "white", "grey", "red", "orange", "yellow",
+               "green", "blue", "purple", "pink", "brown", "beige"),
+    "material": ("metal", "plastic", "glass", "ceramic", "wood",
+                 "paper", "cardboard", "fabric", "rubber"),
+    "shape": ("round", "rectangular", "cylindrical", "irregular"),
+    "size": ("small", "medium", "large"),
+}
+BOOLEAN_ATTRIBUTES = ("fragile", "container")
+
+
+def check_attributes(attributes: object, where: str) -> dict[str, object]:
+    """*attributes* if every key and value is in the fixed vocabulary, or Refused."""
+    if not isinstance(attributes, Mapping):
+        raise Refused(f"{where} must be a mapping.")
+    for key, value in attributes.items():
+        if key in BOOLEAN_ATTRIBUTES:
+            if not isinstance(value, bool):
+                raise Refused(f"{where} has {key} {value!r}, which is not true or false.")
+        elif key in ATTRIBUTE_VALUES:
+            if not isinstance(value, str) or value not in ATTRIBUTE_VALUES[key]:
+                raise Refused(f"{where} has {key} {value!r}, which is not in the vocabulary.")
+        else:
+            raise Refused(f"{where} has the key {key!r}, which is not in the vocabulary.")
+    return dict(attributes)
 
 
 def _normal_alias(alias: str) -> str:

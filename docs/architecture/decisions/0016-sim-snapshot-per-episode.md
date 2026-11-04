@@ -1,7 +1,12 @@
 # ADR-0016: Restore a seeded sim database for every harvest episode
 
 <!-- --8<-- [start:body] -->
-**Status:** Proposed · **Date:** 2026-10-22
+**Status:** Proposed · **Date:** 2026-10-22 · **Revised:** 2026-11-05
+
+The database's side is built
+([ADR-0023](/architecture/decisions/0023-offline-restore-and-map-gate.md)). The
+harness's side is not, so this stays Proposed. The revision replaces the plain copy
+with the restore tool, and the fixed map name with a computed one.
 
 **Context**
 
@@ -51,58 +56,73 @@ We considered:
   ([ADR-0010](/architecture/decisions/0010-session-owns-people-and-conversations.md)),
   and it uses the robot's map, not the sim world's.
 - **No database.** Every episode would test only "memory unavailable".
+- **A plain copy of the seed to a new file per episode.** This was the first
+  version of this decision. Each new file would start its ID counters again from
+  the seed's, so an object ID in one episode's trace could name another object in
+  the next. A restore to one path per worker keeps IDs unique across the worker's
+  episodes, and it recovers whatever a killed node left in its `-wal`.
 
 **Decision**
 
-- A new module, `walkie_database.seed_sim`, run as `pixi run db-seed-sim`
-  (new), builds a sim seed from walkie-agent-ros's locations file for the
-  world (planned: `config/locations.chula_pat14_6.toml`) and the world's
-  own `world.toml`, the only source of the room outlines. The world file
-  sits on a walkie-ros branch that is not merged to main, so its path may
-  change. Both files, the map id and the output path are arguments.
-- The seed holds one `map` row, with `frame_id` `map`, a fixed
-  `created_at` and a description that names the source files. It holds one
-  `room` row for each room in `world.toml`, with the stand pose and
-  description of the location of the same name, and the room's outline in
-  `room_shape`. It holds nothing else: no objects, people, faces, sessions,
-  conversations or vectors.
-- The builder fills a database in memory and writes it with `VACUUM INTO`,
-  which refuses a path that exists. It writes nothing when a room has no
-  location of the same name, or when a stand pose is outside its outline.
-- Once per run, the harness builds the seed in the run folder and records
-  its SHA-256. For each episode it:
+- `pixi run db-seed-sim` runs `walkie_database.seed_sim`. It takes the map folder,
+  the arena, the date, `--clock-kind ros_sim` and the output path, and also the
+  world's authoring file, a locations file and a room-names file. All are explicit
+  arguments. The map ID is computed from the map's digest
+  ([ADR-0020](/architecture/decisions/0020-map-identity-and-seed-lineage.md)), and
+  never given by hand.
+- The world's authoring file gives the room keys and outlines, and nothing else. It
+  sits on a walkie-ros branch that is not merged to main, so its path may change.
+  The room-names file maps each key to a display name, such as `living_room` to
+  `living room`. The locations file gives the stand pose and description at exactly
+  that display name. The builder reads no coordinate from the world's room poses.
+- The seed holds one `map` row, a `store_meta` row, and one `room` row and outline
+  for each room. It holds keyed anchors, surfaces and catalogue rows only when a
+  reviewed file supplies them. It holds no L3 objects, people, faces, sessions,
+  conversations or events, and no synthetic vectors. The world's furniture polygons
+  are single points, and they never become anchors.
+- The builder checks every input before it creates the output, and writes nothing
+  when a check fails. An existing output needs `--replace`, and only a seed can be
+  replaced.
+- Once per run, the harness builds the seed in the run folder and records its
+  SHA-256. Each worker has one store path. For each episode the harness:
     1. stops the worker's database node together with the sim stack;
-    2. copies the seed to a new file in the episode's folder;
+    2. runs `pixi run db-restore --seed <seed> --db <worker's store>
+       --map-folder <folder> --clock-kind ros_sim --replace`;
     3. starts the node on the worker's domain and router, unremapped, with
-       `--ros-args -p db_path:=<that file> -p map_id:=chula_pat14_6`;
-    4. calls `/walkie_database/find_objects` until it answers with
-       `success` true, and only then starts the agent.
-- An episode's file is never reused, and nothing is restored into a file
-  that a node has open. A plain copy is safe here because the seed is
-  closed and has no `-wal` file, unlike the live database.
-- The node, the schema and the messages do not change.
+       `pixi run db-memory -p db_path:=<worker's store> -p map_folder:=<folder>
+       -p map_id:=<computed id> -p use_sim_time:=true`;
+    4. calls `/walkie_database/find_objects` until it answers with `success` true,
+       and only then starts the agent. It treats an exit of the node as a failed
+       start.
+- The tool and the node share the store's lock, so a restore into a file that a
+  node holds open is refused
+  ([ADR-0023](/architecture/decisions/0023-offline-restore-and-map-gate.md)).
 
 **Consequences**
 
-- Every episode starts from the same memory, and no episode, worker or real
-  run sees another's.
+- Every episode starts from the same rows, and no episode, worker or real run sees
+  another's. IDs differ between episodes, because the counters carry. A scenario
+  must not depend on a literal object ID.
 - In the harvest's first version (v0), nothing writes during an episode,
   so `find_objects` answers `Found 0 objects.` and the agent moves on to
   detection. The restore starts to matter once object memory ingests
   detections in sim.
-- Each episode pays one node start. It is not measured, and it can overlap
-  the sim's readiness wait.
-- The harness runs `db-node` and `db-seed-sim` from a checkout at the
-  commit walkie-agent-ros pins. Under rmw_zenoh_cpp 0.2.11, a node built
-  from another `FindObjects` definition never answers (ADR-0015), so the
-  probe in step 4 needs a timeout.
-- Room names must agree between the two source files. The builder fails
-  when they do not.
+- Each episode pays one restore and one node start. Neither is measured, and the
+  node start can overlap the sim's readiness wait.
+- The harness runs these tasks from a checkout at the commit walkie-agent-ros pins.
+  Under rmw_zenoh_cpp 0.2.11, a node built from another `FindObjects` definition
+  never answers (ADR-0015), so the probe in step 4 needs a timeout.
+- The room names must agree across the three source files. The builder fails when
+  they do not. `config/locations.sim.toml` in walkie-agent-ros describes a blank-map
+  demo, and the builder refuses it. The world needs its own locations file.
+- A wrong path or map stops the node's start, so a failed episode cannot be blamed
+  on an empty store.
 - The seed holds no personal data, so a harvest trace that quotes
   `find_objects` holds none from this database.
 - A change to the builder's arguments needs walkie-agent-ros's pin bumped.
 
 **See also:** [Sim Harvest Support](/architecture/harvest.md),
+[Seeds, restore and the map gate](/architecture/database.md#seeds-restore-and-the-map-gate),
 [The node's interface](/architecture/database.md#the-nodes-interface),
 [Object Memory](/architecture/object-memory.md)
 <!-- --8<-- [end:body] -->

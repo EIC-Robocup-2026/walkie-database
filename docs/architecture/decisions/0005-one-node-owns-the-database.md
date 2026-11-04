@@ -1,7 +1,7 @@
 # ADR-0005: One ROS 2 node owns and writes the database
 
 <!-- --8<-- [start:body] -->
-**Status:** Accepted · **Date:** 2026-10-19
+**Status:** Accepted · **Date:** 2026-10-19 · Offline tools may write a stopped store, under its lock: [ADR-0023](/architecture/decisions/0023-offline-restore-and-map-gate.md)
 
 **Context**
 
