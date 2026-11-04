@@ -16,8 +16,8 @@ by meaning, merge it in, and clean the objects up from time to time.
 
 ## Summary
 
-- **Perception sends one cloud per detection**, in whatever TF frame it
-  has, with the detection's label, score and CLIP vector
+- **Perception sends one cloud per detection**, in the camera's optical
+  frame, with the detection's label, score and CLIP vector
   ([ADR-0012](decisions/0012-per-detection-clouds-any-frame.md)).
 - **The node merges in memory.** It keeps the live objects in RAM and writes
   the changed ones to SQLite every few seconds. Raw detections are not
@@ -55,29 +55,36 @@ flowchart TB
 
 ### 1. Receive detections
 
-Perception publishes all detections from one camera frame together, as one
-message. The fields of one detection:
+walkie-vision publishes all detections from one camera frame together, as one
+`walkie_vision_msgs/ObjectDetectionArray` on `/walkie_vision/objects`. The array
+has the `header` (the camera's optical frame and the capture time), the
+`camera_info`, the `classes` it searched for, the `detections`, and a
+`stream_id`, a UUID made once per publisher run. The fields of one detection:
 
-| Field             | Type                         | What it is                                                         |
-| ----------------- | ---------------------------- | ------------------------------------------------------------------ |
-| `header`          | `std_msgs/Header`            | The camera frame and the time of the image                         |
-| `label`           | `string`                     | What the detector called it, for example `cup`                     |
-| `score`           | `float32`                    | The detector's confidence                                          |
-| `embedding_model` | `string`                     | Which model made `embedding`, for example `clip_vit_b16`           |
-| `embedding`       | `float32[]`                  | The CLIP vector of the detection's image crop                      |
-| `points`          | `sensor_msgs/PointCloud2`    | The detection's points from the depth image, in `header.frame_id`  |
-| `crop`            | `sensor_msgs/CompressedImage` | The image crop, optional. Saved to disk if present                 |
+| Field             | Type                          | What it is                                                         |
+| ----------------- | ----------------------------- | ------------------------------------------------------------------ |
+| `label`           | `string`                      | What the detector called it, for example `cup`                     |
+| `score`           | `float32`                     | The detector's confidence, in [0, 1]                               |
+| `track_id`        | `uint32`                      | A hint within `stream_id`. 0 means untracked. Never a memory id    |
+| `bbox`            | `vision_msgs/BoundingBox2D`   | The box in full-image pixels                                       |
+| `embedding_model` | `string`                      | Which model made `embedding`, for example `clip_vit_b16`. Empty when not sampled |
+| `embedding`       | `float32[]`                   | The CLIP vector of the detection's image crop. Empty when not sampled |
+| `points`          | `sensor_msgs/PointCloud2`     | The detection's points from the depth image, with the array's header. Empty with under 30 valid points |
+| `crop`            | `sensor_msgs/CompressedImage` | The padded JPEG crop, with the array's header. Empty when not sampled |
+| `view_quality`    | `float32`                     | How good this view is for choosing a best view, in [0, 1]          |
+| `color_shares`    | `float32[]`                   | Twelve mask-only colour shares, or empty                           |
 
-The node looks up the transform from `header.frame_id` to the map frame at
-`header.stamp`, so perception does not need to know about maps
+The node looks up the transform from the array's `header.frame_id` to the map
+frame at `header.stamp`, so perception does not need to know about maps
 ([ADR-0012](decisions/0012-per-detection-clouds-any-frame.md)). A detection
 whose transform is not available is dropped and counted in the log.
 
-!!! info "A custom message needs an interface package"
-    `ObjectDetection` is not a standard ROS message. It needs its own
-    interface package, built with colcon, the way walkie-agent-ros builds
-    `rai_interfaces`. Perception must build the same package, or the two
-    sides cannot read each other's messages.
+!!! info "The message lives in walkie-vision"
+    The node receives this type and does not own it, so it stays in its
+    producer's package. This repository builds `walkie_vision_msgs` from the
+    commit that `ros2_ws.repos` pins
+    ([ADR-0019](decisions/0019-object-service-contracts.md)). Both sides must
+    build the same definition, or they cannot read each other's messages.
 
 ### 2. Match a detection to an object
 
@@ -148,7 +155,7 @@ on real data. Record the detection topic once, then replay it as often as
 needed:
 
 ```bash
-pixi run ros2 bag record /walkie_database/detections
+pixi run ros2 bag record /walkie_vision/objects
 ```
 
 ```bash
@@ -194,7 +201,7 @@ with objects from other programs.
 
     --8<-- "architecture/decisions/0011-merge-clouds-in-memory.md:body"
 
-??? note "ADR-0012: Perception sends one cloud per detection, in any TF frame · Proposed"
+??? note "ADR-0012: Perception sends one cloud per detection, in the camera frame · Proposed"
 
     --8<-- "architecture/decisions/0012-per-detection-clouds-any-frame.md:body"
 

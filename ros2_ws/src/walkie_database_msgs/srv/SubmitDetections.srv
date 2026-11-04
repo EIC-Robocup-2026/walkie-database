@@ -1,0 +1,10 @@
+string request_id
+string task_id
+string cause
+string map_id
+walkie_vision_msgs/ObjectDetectionArray objects
+---
+OperationStatus status
+# True only when the later M1 ingest worker has accepted this observation.
+# NOT_READY and false in prep. Never pretend this has been durably fused.
+bool queued

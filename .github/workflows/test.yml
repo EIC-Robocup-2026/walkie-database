@@ -29,9 +29,14 @@ jobs:
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
 
+      # walkie_database_msgs nests walkie_vision_msgs, from the commit that
+      # ros2_ws.repos pins. That commit must be on GitHub for this to pass.
+      - name: Import the pinned walkie-vision commit
+        run: pixi run import-interfaces
+
       # The node's tests import walkie_database_msgs, which colcon builds into
       # ros2_ws/install; scripts/activate.sh sources it in the next pixi run.
-      - name: Build the message package
+      - name: Build the message packages
         run: pixi run build-msgs
 
       - name: Run tests

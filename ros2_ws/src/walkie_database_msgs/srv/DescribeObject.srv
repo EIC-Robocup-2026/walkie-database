@@ -1,0 +1,9 @@
+string request_id
+string task_id
+string cause
+string map_id
+int64 object_id
+---
+OperationStatus status
+int64 resolved_id
+bool queued                       # Async acceptance only; read eventual caption with GetObject.

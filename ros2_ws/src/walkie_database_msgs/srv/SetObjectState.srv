@@ -1,0 +1,16 @@
+string request_id
+string task_id
+string cause
+string map_id
+int64 object_id
+uint64 expected_revision           # Must equal resolved current row revision.
+# begin_grasp,grasp_succeeded,grasp_failed,prepare_place,place_succeeded,
+# hand_over_succeeded,grip_lost. Not an arbitrary state setter.
+string operation
+string gripper_frame               # Required for grasp_succeeded, prepare_place and grip_lost.
+bool has_pose
+geometry_msgs/PoseStamped pose     # Trusted skill observation/release target; not LLM numbers.
+string surface_key                 # Intended/verified placement surface, else empty.
+---
+OperationStatus status
+ObjectSummary object              # Resolved current row, when available.

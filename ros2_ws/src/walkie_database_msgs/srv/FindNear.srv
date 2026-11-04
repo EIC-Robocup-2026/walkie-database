@@ -1,0 +1,6 @@
+ObjectQuery query                  # relation required; text references resolved by SearchObjects first.
+uint32 max_results 20
+---
+OperationStatus status
+ObjectMatch[] matches
+bool truncated

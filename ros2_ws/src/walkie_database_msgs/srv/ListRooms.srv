@@ -1,0 +1,4 @@
+string map_id
+---
+OperationStatus status
+RoomSummary[] rooms               # Sorted canonical names; empty valid map succeeds.

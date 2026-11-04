@@ -1,0 +1,10 @@
+string map_id
+string text                       # FTS terms, not raw SQL or caller-authored MATCH syntax.
+bool has_since
+builtin_interfaces/Time since     # Same clock as this store.
+string room                       # Empty means any.
+uint32 max_results 20
+---
+OperationStatus status
+Event[] events                    # Newest first, stable ID tie-break.
+bool truncated

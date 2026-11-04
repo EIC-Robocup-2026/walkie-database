@@ -1,0 +1,10 @@
+string map_id
+int64 object_id                    # Positive database ID, not a live obj_ handle.
+bool include_cloud false           # Internal motion client only; LLM atomic always false.
+---
+OperationStatus status
+int64 requested_id
+bool merged                        # True when following merged_into changed the ID.
+ObjectSummary object               # Current row; discarded is OK with state=discarded.
+Surface[] surfaces                 # Anchor's surfaces, empty for ordinary movable objects.
+sensor_msgs/PointCloud2 cloud       # Optional map-frame merged cloud; empty when unavailable.

@@ -317,14 +317,12 @@ objects. Each frame's detections arrive together, each with its own points
 and embedding ([ADR-0012](decisions/0012-per-detection-clouds-any-frame.md)).
 Two producers are planned:
 
-- **On the robot, walkie-vision.** It will publish
-  `walkie_vision_msgs/ObjectDetectionArray` on `/walkie_vision/objects`, a
-  proposed name. Its nodes are not built yet. Object memory sketches its
-  own message on `/walkie_database/detections`.
+- **On the robot, walkie-vision.** It publishes
+  `walkie_vision_msgs/ObjectDetectionArray` on `/walkie_vision/objects`.
   [ADR-0015](decisions/0015-messages-in-this-repository.md) keeps a received
-  message in its producer's package, which points to walkie-vision's type.
-  The topic name is still open, here and in walkie-vision's
-  `docs/architecture/vision.md`.
+  message in its producer's package, and this repository builds that type from
+  a pinned commit
+  ([ADR-0019](decisions/0019-object-service-contracts.md)).
 - **In the sim, oracle perception.** walkie-agent-ros plans an
   `oracle_perception` node that publishes detections from the scenario,
   with noise and dropout. It stands in for walkie-vision with the same

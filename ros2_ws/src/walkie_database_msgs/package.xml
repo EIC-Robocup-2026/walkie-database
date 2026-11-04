@@ -15,6 +15,10 @@
 
   <depend>builtin_interfaces</depend>
   <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <!-- From the pinned walkie-vision commit in ros2_ws.repos. Run tools/import_interfaces.py first. -->
+  <depend>walkie_vision_msgs</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>
 

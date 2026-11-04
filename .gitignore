@@ -7,6 +7,8 @@ data/
 /ros2_ws/build/
 /ros2_ws/install/
 /ros2_ws/log/
+# The pinned walkie-vision clone from tools/import_interfaces.py
+/ros2_ws/src/walkie-vision/
 # MkDocs build output
 site/
 # Python

@@ -17,6 +17,20 @@ ros-jazzy-ros-base = ">=0.11.0,<0.12"
 # because rai-core rejects the OpenCV 5 that RoboStack's 0.2.11 stack needs
 # (its ADR-0032). This package also provides the router, rmw_zenohd.
 ros-jazzy-rmw-zenoh-cpp = ">=0.2.11,<0.3"
+# walkie_vision_msgs, which the database's new interfaces nest, needs
+# vision_msgs. walkie-vision pins the same range.
+ros-jazzy-vision-msgs = ">=4.1.1,<5"
+# Read and write the camera-frame clouds of walkie_vision_msgs/ObjectDetection.
+ros-jazzy-sensor-msgs-py = ">=5.3.8,<6"
+# Look up the camera's transform into the map at an observation's stamp.
+ros-jazzy-tf2-ros = ">=0.36.23,<0.37"
+# Read ros2_ws.repos, and later the map, room and anchor YAML files, with safe
+# loading only.
+pyyaml = ">=6.0.3,<7"
+# Declared now for object memory's later geometry and matching. No code imports
+# them yet.
+scipy = ">=1.18.1,<2"
+scikit-learn = ">=1.9.1,<2"
 # The sqlite-vec extension (vec0 vector tables) and its Python loader.
 # sqlite-vec is not 1.0 yet, so minor releases may change its SQL; move the
 # upper bound on purpose, after the tests pass (ADR-0007).
@@ -65,15 +79,25 @@ RMW_IMPLEMENTATION = "rmw_zenoh_cpp"
 [activation]
 scripts = ["scripts/activate.sh"]
 
+# Clones the walkie-vision commit that ros2_ws.repos pins into
+# ros2_ws/src/walkie-vision, which Git ignores. build-msgs needs it, and does
+# not depend on this task, because a build must not reach the network. To import
+# from a local repository, pass --vision-source PATH --vision-ref FULL_SHA.
+[tasks.import-interfaces]
+cmd = "python tools/import_interfaces.py"
+description = "Clone the walkie-vision commit pinned in ros2_ws.repos, which holds walkie_vision_msgs"
+
 # The same command as walkie-agent-ros's build-ros2 and walkie-vision's
-# build-msgs. Python3_EXECUTABLE is passed explicitly so a user-level
-# ~/.colcon/defaults.yaml (often set for an apt ROS install) cannot point CMake
-# at the system Python. The next `pixi run` or `pixi shell` sources the
-# overlay; the shell that ran the build does not.
+# build-msgs, limited to the two message packages: the imported clone is not
+# otherwise part of this workspace. colcon builds walkie_vision_msgs first,
+# because walkie_database_msgs depends on it. Python3_EXECUTABLE is passed
+# explicitly so a user-level ~/.colcon/defaults.yaml (often set for an apt ROS
+# install) cannot point CMake at the system Python. The next `pixi run` or
+# `pixi shell` sources the overlay; the shell that ran the build does not.
 [tasks.build-msgs]
-cmd = "colcon build --symlink-install --cmake-args -DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python"
+cmd = "colcon build --symlink-install --packages-select walkie_vision_msgs walkie_database_msgs --cmake-args -DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python"
 cwd = "ros2_ws"
-description = "Build the walkie_database_msgs package in ros2_ws with colcon"
+description = "Build walkie_vision_msgs and walkie_database_msgs in ros2_ws with colcon (run import-interfaces first)"
 
 # The test task does not depend on build-msgs: pixi computes the environment
 # before it runs a dependency, so the overlay would still be missing in the

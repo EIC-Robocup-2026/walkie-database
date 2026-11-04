@@ -15,3 +15,4 @@ steps in your own project, or when you add a new kind of memory.
 | [7. Use the Zenoh middleware](07-zenoh.md)                          | Puts every `pixi run` on Zenoh, like walkie-ros and the robot     |
 | [8. Add the message package](08-message-package.md)                 | Builds the node's own message types, and its first service        |
 | [9. Add the people and session services](09-people-services.md)     | Lets the agent remember and recognise people, one session at a time |
+| [10. Pin vision and freeze the object interfaces](10-object-interfaces.md) | Builds the pinned vision types, and defines the object services' types ahead of their handlers |

@@ -29,16 +29,23 @@ pixi --version
 git clone https://github.com/EIC-Robocup-2026/walkie-database.git
 cd walkie-database
 pixi install
+pixi run import-interfaces
 pixi run build-msgs
 ```
 
 `pixi install` downloads everything listed in `pixi.toml` into a hidden
 `.pixi/` folder inside the project. Nothing is installed system-wide.
 
+`pixi run import-interfaces` clones the walkie-vision commit that
+`ros2_ws.repos` pins into `ros2_ws/src/walkie-vision`. The node's types nest
+`walkie_vision_msgs`, so the build needs it. Run it again when the pin moves. It
+refuses a clone with changes. If the pinned commit is not on GitHub yet, see
+[Import it](setup/10-object-interfaces.md#step-3-import-it).
+
 `pixi run build-msgs` builds the node's message and service types, the
-`walkie_database_msgs` package in `ros2_ws/`, with colcon. Every later
-`pixi run` and `pixi shell` can then use them. Run it again after you
-change a file in `ros2_ws/src/walkie_database_msgs/`.
+`walkie_vision_msgs` and `walkie_database_msgs` packages in `ros2_ws/`, with
+colcon. Every later `pixi run` and `pixi shell` can then use them. Run it again
+after you change a file in `ros2_ws/src/walkie_database_msgs/`.
 
 ## 3. Run the tests
 
@@ -48,7 +55,7 @@ pixi run test
 
 The tests use throwaway databases and need no robot. They run on Fast DDS,
 so they need no Zenoh router either. All tests should pass. If you skipped
-`build-msgs`, they stop at once and tell you to run it.
+the import or the build, they stop at once and tell you what to run.
 
 ## 4. Run the database node
 

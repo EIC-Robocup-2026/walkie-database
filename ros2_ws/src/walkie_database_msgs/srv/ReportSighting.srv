@@ -1,0 +1,12 @@
+string request_id
+string task_id
+string cause
+string map_id
+int64 object_id
+bool seen
+walkie_vision_msgs/ObjectDetectionArray objects # The actual on-demand observation, even if empty.
+uint32 detection_index             # Used only when seen=true; index into objects.detections.
+---
+OperationStatus status
+bool applied                       # True only if later evidence gates accepted a new independent look.
+ObjectSummary object

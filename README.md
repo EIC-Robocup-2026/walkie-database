@@ -22,7 +22,8 @@ curl -fsSL https://pixi.sh/install.sh | sh  # once per computer, then reopen the
 git clone https://github.com/EIC-Robocup-2026/walkie-database.git
 cd walkie-database
 pixi install
-pixi run build-msgs   # builds walkie_database_msgs in ros2_ws/
+pixi run import-interfaces   # clones the walkie-vision commit in ros2_ws.repos
+pixi run build-msgs          # builds walkie_vision_msgs and walkie_database_msgs in ros2_ws/
 pixi run test
 ```
 
@@ -59,7 +60,8 @@ pixi run db-browse
 
 | Command               | What it does                                                        |
 | --------------------- | ------------------------------------------------------------------- |
-| `pixi run build-msgs` | Build the node's messages and services, `walkie_database_msgs` in `ros2_ws/`, with colcon. |
+| `pixi run import-interfaces` | Clone the walkie-vision commit that `ros2_ws.repos` pins into `ros2_ws/src/walkie-vision`. |
+| `pixi run build-msgs` | Build `walkie_vision_msgs` and the node's own messages and services, `walkie_database_msgs`, in `ros2_ws/` with colcon. |
 | `pixi run db-node`    | Run the database node. It owns and writes `data/walkie.db`.         |
 | `pixi run db-shell`   | Open `data/walkie.db` read-only in `sqlite3`, with sqlite-vec loaded. |
 | `pixi run db-seed`    | Write a sample house, people and conversation to `data/demo.db`. Never touches `walkie.db`. |
@@ -81,8 +83,10 @@ pixi run db-browse
 | `src/walkie_database/migrations/`   | The schema, as numbered SQL files                         |
 | `src/walkie_database/seed.py`       | The sample data that `db-seed` writes                     |
 | `ros2_ws/src/walkie_database_msgs/` | The node's messages and services, built by `build-msgs`   |
+| `ros2_ws.repos`                     | The walkie-vision commit whose messages this repository nests |
+| `tools/import_interfaces.py`        | Clones that commit into `ros2_ws/src/walkie-vision`, which Git ignores |
 | `scripts/activate.sh`               | Adds the `build-msgs` output to every `pixi run`          |
 | `datasette-plugins/`                | Datasette plugins for `db-browse`                         |
-| `tests/`                            | Tests for the connection, migrations, schema, node, people and sample data |
+| `tests/`                            | Tests for the connection, migrations, schema, node, people, sample data and interfaces |
 | `data/`                             | The database files. Not in Git.                           |
 | `docs/`                             | The documentation site (MkDocs)                           |

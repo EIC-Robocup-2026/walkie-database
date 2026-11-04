@@ -24,14 +24,16 @@ from walkie_database.migrate import migrate  # noqa: E402
 
 
 def pytest_configure(config):
-    # The message package is built separately (`pixi run build-msgs`), and
-    # scripts/activate.sh adds it to the environment only once it exists.
-    # Without it, importing walkie_database.node fails with an ImportError
+    # The message packages are built separately (`pixi run build-msgs`), and
+    # scripts/activate.sh adds them to the environment only once they exist.
+    # Without them, importing walkie_database.node fails with an ImportError
     # that does not say what to do.
-    if importlib.util.find_spec("walkie_database_msgs") is None:
-        raise pytest.UsageError(
-            "walkie_database_msgs is not built: run `pixi run build-msgs` once, then run the tests again"
-        )
+    for package in ("walkie_vision_msgs", "walkie_database_msgs"):
+        if importlib.util.find_spec(package) is None:
+            raise pytest.UsageError(
+                f"{package} is not built: run `pixi run import-interfaces` and "
+                "`pixi run build-msgs` once, then run the tests again"
+            )
 
 
 @pytest.fixture

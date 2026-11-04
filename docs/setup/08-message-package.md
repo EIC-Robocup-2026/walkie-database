@@ -84,6 +84,9 @@ cwd = "ros2_ws"
 pixi run build-msgs
 ```
 
+This is the task as this step first wrote it. [Step 10](10-object-interfaces.md)
+adds `--packages-select` and an import that must run first.
+
 | Part                    | Why                                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------------------- |
 | The build tools         | `ros-base` pulls in `ament_cmake`, `rosidl_default_generators`, CMake and pkg-config only indirectly, so they are listed. Without the compilers and make, CMake falls back to whatever the system has, such as an apt ROS install. |
@@ -119,10 +122,11 @@ build.
 
 Pixi 0.80 does not show the script's output, so a missing build would
 otherwise only show up as an `ImportError`. Instead, `tests/conftest.py`
-stops the tests at once with:
+stops the tests at once with a line like this one, since
+[step 10](10-object-interfaces.md) added a second package:
 
 ```text
-walkie_database_msgs is not built: run `pixi run build-msgs` once, then run the tests again
+walkie_database_msgs is not built: run `pixi run import-interfaces` and `pixi run build-msgs` once, then run the tests again
 ```
 
 `test` does not depend on `build-msgs`. Pixi computes the environment
@@ -186,12 +190,17 @@ repositories:
     version: <commit>
 ```
 
-They build only the message package, with the same build tools as in
-Step 2:
+`walkie_database_msgs` nests `walkie_vision_msgs` since
+[step 10](10-object-interfaces.md), so they pin walkie-vision too, at a commit
+with the same type hashes as this repository's `ros2_ws.repos`, and build both,
+with the same build tools as in Step 2:
 
 ```bash
-colcon build --symlink-install --packages-select walkie_database_msgs
+colcon build --symlink-install --packages-select walkie_vision_msgs walkie_database_msgs
 ```
+
+walkie-vision depends on nothing here, so the pins form no cycle. A consumer
+pinned to a commit before step 10 still builds only `walkie_database_msgs`.
 
 ## Changing a message or service
 
@@ -201,7 +210,8 @@ the service, but its requests are never answered, and nothing reports an
 error. A change to comments only keeps the hash.
 
 1. Edit the `.msg` or `.srv` file, and its comments.
-2. Update the node and `tests/test_node.py`.
+2. Update the node, `tests/test_node.py` and the pins in
+   `tests/test_interfaces.py`.
 3. Run `pixi run build-msgs`, then `pixi run test`.
 4. Bump the pinned commit in every repository that uses the package,
    rebuild it there, and restart the node and its callers.

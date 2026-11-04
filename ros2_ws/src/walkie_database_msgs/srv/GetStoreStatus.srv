@@ -1,0 +1,15 @@
+# Read-only probe; no request fields.
+---
+OperationStatus status
+string map_id
+string map_hash                   # Full canonical SHA-256, not just the 8-character suffix.
+string baseline_rev               # Empty is valid no-baseline mode.
+string store_id
+string clock_kind                 # wall or ros_sim.
+uint32 schema_version
+bool map_valid
+bool ingest_enabled               # False in preparation.
+bool captions_enabled             # False in preparation.
+string[] object_embedding_models  # clip_vit_b16; no fake model on a real deployment.
+uint32 arrays_received
+uint32 arrays_rejected

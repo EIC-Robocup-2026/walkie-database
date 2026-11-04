@@ -1,0 +1,12 @@
+string request_id
+string task_id
+string cause
+string map_id
+string kind                       # action,note,error,handover.
+string text                       # 1..512 characters; no personal details.
+int64 object_id                    # 0 none; otherwise resolve current object.
+int64 person_id                    # 0 none; must belong to named/open session if provided.
+int64 session_id                   # 0 selects open session only when person_id is nonzero.
+---
+OperationStatus status
+Event event

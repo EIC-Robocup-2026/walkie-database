@@ -1,0 +1,11 @@
+ObjectQuery query
+bool use_embedding                 # False is structured/lexical-only search.
+ModelVector vector                 # Required nonempty known model only when use_embedding.
+string text                        # <=512 characters; lexical terms only, not parsed into filters.
+uint32 max_results 20               # Range 1..100; reject values outside it.
+---
+OperationStatus status
+ObjectMatch[] matches
+SearchPrior[] priors                # Unseen catalogue entries, separate from actual objects.
+bool lexical_only
+bool truncated

@@ -1,0 +1,5 @@
+string map_id
+walkie_vision_msgs/ObjectDetectionArray objects
+---
+OperationStatus status             # Request validity; individual geometry failures are in results.
+LocalizedDetection[] results       # Exactly len(objects.detections), in original order.

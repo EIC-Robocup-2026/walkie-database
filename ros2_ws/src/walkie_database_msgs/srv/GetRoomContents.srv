@@ -1,0 +1,7 @@
+ObjectQuery query                  # Nonempty room required; same state/layer/filter semantics.
+uint32 max_results 100
+---
+OperationStatus status
+RoomSummary room
+ObjectMatch[] objects
+bool truncated

@@ -1,0 +1,7 @@
+string request_id
+string task_id
+string cause
+string map_id
+---
+OperationStatus status
+uint32 objects_changed

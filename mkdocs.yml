@@ -91,6 +91,7 @@ nav:
       - 7. Use the Zenoh Middleware: setup/07-zenoh.md
       - 8. Add the Message Package: setup/08-message-package.md
       - 9. Add the People and Session Services: setup/09-people-services.md
+      - 10. Pin Vision and Freeze the Object Interfaces: setup/10-object-interfaces.md
   - Architecture:
       - architecture/index.md
       - The Database: architecture/database.md

@@ -1,0 +1,9 @@
+# The repositories this one builds from source. tools/import_interfaces.py
+# reads this file, and it is also a valid vcstool file. Only
+# ros2_ws/src/walkie_vision_msgs in the clone is built. The version is a full
+# commit, never a branch, so a build cannot silently change types.
+repositories:
+  ros2_ws/src/walkie-vision:
+    type: git
+    url: https://github.com/EIC-Robocup-2026/walkie-vision.git
+    version: b2f9f2e76c956e284115da4ad68f60f665d008aa

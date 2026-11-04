@@ -41,6 +41,10 @@ them by meaning, by position and by words.
   in `walkie_database_msgs`, a package in `ros2_ws/src/`. Other
   repositories build it from a pinned commit of this one
   ([ADR-0015](decisions/0015-messages-in-this-repository.md)).
+- **Object services in new types.** The types for object search, rooms, events
+  and state are frozen ahead of their handlers, and the old types keep their
+  hashes. They nest `walkie_vision_msgs`, which this repository builds from a
+  pinned commit ([ADR-0019](decisions/0019-object-service-contracts.md)).
 
 ## The parts
 
@@ -77,9 +81,11 @@ the node writes.
 ## The node's interface
 
 The node is `/walkie_database`. Its message and service types are in the
-`walkie_database_msgs` package, in `ros2_ws/src/` of this repository, and
-`pixi run build-msgs` builds them
-([ADR-0015](decisions/0015-messages-in-this-repository.md)).
+`walkie_database_msgs` package, in `ros2_ws/src/` of this repository.
+`pixi run import-interfaces` clones the walkie-vision commit that the package
+nests, and `pixi run build-msgs` builds both
+([ADR-0015](decisions/0015-messages-in-this-repository.md),
+[ADR-0019](decisions/0019-object-service-contracts.md)).
 
 | Parameter | Default          | What it is                                                                          |
 | --------- | ---------------- | ----------------------------------------------------------------------------------- |
@@ -400,6 +406,41 @@ a wrong field name fails at once.
 `PersonMatches` holds one query's list, `PersonMatch[] people`, nearest
 first.
 
+### The object contract
+
+!!! warning "Types only, so far"
+    These types are built and frozen, but the node serves none of these
+    endpoints yet. A type existing does not mean a feature exists. Until a
+    handler lands, a client finds no service.
+
+| Endpoint under `/walkie_database/` | Type                                                      | When it is served, what it does                                   |
+| ---------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
+| `search_objects`                   | `SearchObjects`                                           | Filters by map, room, state, layer and attributes before ranking   |
+| `get_object`                       | `GetObject`                                               | One object by id, following a merged object to its winner          |
+| `find_near`                        | `FindNear`                                                | Objects on, inside or near a reference                             |
+| `list_rooms`                       | `ListRooms`                                               | The rooms of a map                                                 |
+| `get_room_contents`                | `GetRoomContents`                                         | What memory holds in one room                                      |
+| `remember_event`, `find_events`    | `RememberEvent`, `FindEvents`                             | The task's event log                                               |
+| `localize_objects`                 | `LocalizeObjects`                                         | Stateless centroids of supplied clouds, at their stamp. Stores nothing |
+| `get_store_status`                 | `GetStoreStatus`                                          | A read-only probe of the map, schema and store                     |
+| `set_object_state`                 | `SetObjectState`                                          | `NOT_READY` until the fusion core lands                            |
+| `report_sighting`                  | `ReportSighting`                                          | `NOT_READY` until the fusion core lands                            |
+| `arena_reset`                      | `ArenaReset`                                              | `NOT_READY` until the fusion core lands. It never restores a file  |
+| `submit_detections`                | `SubmitDetections`                                        | `NOT_READY` until the fusion core lands                            |
+| `describe_object`                  | `DescribeObject`                                          | `NOT_READY` while captions are disabled                            |
+
+`objects/updates` (`ObjectUpdates`, reliable, volatile, depth 100) will announce
+committed changes, and a client that sees a gap in `sequence` or a new `store_id`
+reads again. Every new response has an `OperationStatus`: its `code` is always
+set by the server, and `message` says why in at most 512 characters. An empty
+successful search is `OK` with no results, so it differs from an unavailable
+backend.
+
+Every field is commented in its `.msg` or `.srv` file, in
+`ros2_ws/src/walkie_database_msgs/`. `tests/test_interfaces.py` pins their
+fields, defaults and hashes, and pins the old types to their hashes from before
+this work.
+
 ## The tables
 
 Arrows point from the table that owns a row to the rows it owns. Deleting
@@ -662,6 +703,8 @@ Vector queries are easier from Python.
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |
 | Connection settings               | `src/walkie_database/db.py`                 | Yes    |
 | The node's messages and services  | `ros2_ws/src/walkie_database_msgs/`         | Yes    |
+| The walkie-vision commit they nest | `ros2_ws.repos`                            | Yes    |
+| The clone of that commit          | `ros2_ws/src/walkie-vision/`, written by `pixi run import-interfaces` | No |
 | Their build                       | `ros2_ws/build/`, `install/` and `log/`, written by `pixi run build-msgs` | No |
 
 !!! tip "Back up with `VACUUM INTO`, not `cp`"
@@ -736,3 +779,7 @@ The sim harvest decision, ADR-0016, is on the
 ??? success "ADR-0018: Match people with an exact scan, one result per person · Accepted"
 
     --8<-- "architecture/decisions/0018-match-people-by-exact-scan.md:body"
+
+??? success "ADR-0019: Freeze the object services in new types, pinned to walkie-vision · Accepted"
+
+    --8<-- "architecture/decisions/0019-object-service-contracts.md:body"
