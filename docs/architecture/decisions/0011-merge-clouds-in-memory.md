@@ -24,10 +24,16 @@ same blobs many times a second.
   detection (`object_observation`), without its points.
 - To re-tune merging, record the detection topic with `ros2 bag` and
   replay it.
+- Object ids do not wait for that write. They are reserved in blocks, in their
+  own committed transaction with `synchronous = FULL`, before the node uses
+  them. A merged or discarded object keeps its row and its id, as a tombstone.
+  The fields and the allocator are in migration 0004 and
+  `src/walkie_database/objects.py`.
 
 **Consequences**
 
-- A crash loses the merging of the last few seconds.
+- A crash loses the merging of the last few seconds. It never gives an object id
+  twice, and it can leave gaps in them.
 - The file stays small: one downsampled cloud per object.
 - Merging cannot be re-run from the database alone. Tuning needs a
   recording.

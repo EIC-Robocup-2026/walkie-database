@@ -48,6 +48,9 @@ them by meaning, by position and by words.
 - **A map's identity is a hash of its content.** `src/walkie_map_id.py` hashes a
   map's decoded pixels and semantic metadata, and other repositories use that
   exact file ([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)).
+- **Object ids are never given twice.** An id is reserved in a committed
+  transaction before anyone sees it, and a merged or discarded object keeps its
+  row as a tombstone ([Object ids and tombstones](#object-ids-and-tombstones)).
 
 ## The parts
 
@@ -453,8 +456,11 @@ the owner deletes them too, except where noted.
 erDiagram
   map ||--o{ room : "contains"
   map ||--o{ object : "contains"
+  map ||--o| store_meta : "is the active map (cannot be deleted)"
   room |o--o{ object : "is in (set to none)"
+  object |o--o{ object : "merged into, split from (set to none)"
   object ||--o| object_cloud : "merged points"
+  object ||--o{ object_label : "called"
   object ||--o{ object_observation : "seen as"
   session |o--o{ object_observation : "during (set to none)"
   session |o--o{ person : "met"
@@ -468,18 +474,80 @@ erDiagram
 
 | Table                | One row is                                                                | Notes                                                                           |
 | -------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `map`                | A map the robot built, for example `arena-2026-10-19`                     | `frame_id` is the TF frame its coordinates are in, usually `map`                 |
+| `map`                | A map the robot built, for example `arena-2026-10-19`                     | `frame_id` is the TF frame its coordinates are in, usually `map`. `map_hash`, `baseline_rev` and `clock_kind` identify it ([Map identity](#map-identity)). A map from before migration 0004 has a blank hash. |
+| `store_meta`         | The identity of the active run, in one row                                | `store_id`, `clock_kind` and `map_id`. `refresh_anchors_pending` is 1 when the anchors need seeding again. A map named here cannot be deleted. Nothing writes this table yet. |
 | `session`            | One run of a task, for example one Receptionist attempt                   | At most one is open (`ended_at` NULL): the session the agent is in. Migration 0003's `session_one_open` index refuses a second. |
-| `last_id`            | The largest id ever given in `session`, and in `person`                   | The node gives a new session or person the next id, so no id is given twice. Triggers keep it up to date. |
+| `last_id`            | The largest id ever given in `session`, in `person` and in `object`       | The node gives a new session or person the next id, so no id is given twice. Object ids are reserved from it in blocks ([Object ids and tombstones](#object-ids-and-tombstones)). Triggers keep it up to date. |
 | `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room                       |
-| `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand) |
+| `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand). See [Object fields](#object-fields). |
 | `object_cloud`       | The merged point cloud of one object                                      | Its own table, so reading `object` never loads the points                      |
-| `object_observation` | One detection of an object                                                | No points ([ADR-0011](decisions/0011-merge-clouds-in-memory.md))                 |
+| `object_label`       | One name a detector gave an object, and how many times                    | Starts empty. `object.label` stays the name in use.                            |
+| `object_observation` | One detection of an object                                                | No points, masks or full images ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)). `view_score`, the camera pose and `color_shares` are the evidence for its crop. |
 | `person`             | One person. `session_id` is NULL for people kept across sessions          | `attributes` is JSON, for example `{"drink": "coke"}`                           |
 | `face`               | One face sample of a person                                               | A person has several, from different angles                                     |
 | `appearance`         | Clothing and body, for when the face is not visible                       | Belongs to one session, because clothes change                                  |
 | `conversation`       | Everything said between two resets of the agent                           |                                                                                 |
 | `message`            | One thing said, by a human, the robot, a tool or the system               | `person_id` says who, when it is known                                          |
+
+### Object fields
+
+Migration 0004 adds these columns to `object`. They hold what object memory will
+write. No code decides a state, measures a belief or merges an object yet, so
+most of them keep their defaults.
+
+| Column                                | Default     | What it is                                                                  |
+| ------------------------------------- | ----------- | --------------------------------------------------------------------------- |
+| `key`                                 | None        | A stable name for a seeded anchor, unique in its map when set                |
+| `layer`                               | `movable`   | `anchor` for furniture that stays, or `movable`                              |
+| `state`                               | `candidate` | `candidate`, `present`, `grasping`, `held`, `missing`, `handed_over`, `discarded` or `merged`, as `ObjectSummary.state` |
+| `p_exist`                             | 0.5         | The belief that it is there, from 0.05 to 0.95                               |
+| `last_verified`                       | None        | When it was last confirmed. Not the same as `last_seen`.                     |
+| `geometry_valid`                      | 1           | 0 when the box is not measured. Such an object has no row in `object_box`, and clearing this column removes the row. |
+| `geometry_stamp`                      | None        | When the box was last observed                                               |
+| `in_baseline`, `depth_seen`           | 0           | Seeded from a confirmed baseline, and seen with depth                        |
+| `revision`                            | 0           | Goes up with each change a client should notice                              |
+| `official_name`, `category`           | None        | Task-level names, set later                                                  |
+| `attributes`                          | `{}`        | A JSON object. The application checks its keys and values.                   |
+| `printed_text`, `caption_model`, `prompt_version` | None | Reserved for captions, which are off                                  |
+| `caption_view_id`                     | None        | The `object_observation` the caption came from. Not a foreign key, because that row already points back here. |
+| `best_view_quality`, `viewpoints`     | 0           | The best view so far, and how many different views                           |
+| `fingerprint_weight`                  | 0           | How much evidence the stored embedding holds                                 |
+| `anchor_node_id`, `anchor_offset`     | None        | Unused for now: a pose relative to a saved map node                          |
+| `merged_into`, `split_from`           | None        | Links to the object that took over, or the one this came from. Set to none when that object is deleted. |
+| `gripper_frame`                       | None        | Reserved for a held object                                                   |
+| `expected_pose`, `expected_surface_key` | None      | Reserved for a planned place                                                 |
+
+An upgrade treats old rows carefully. An object with `source = 'map'` becomes an
+`anchor` that is `present`, with `p_exist` at 0.95. Every other old object stays a
+`candidate` until someone reviews it or seeds it again. `last_verified` stays
+empty, because an old sighting was never verified, and `in_baseline` stays 0,
+because only a confirmed baseline seed sets it.
+
+### Object ids and tombstones
+
+`src/walkie_database/objects.py` hands out object ids. Clients hold on to an id
+across a restart, so giving one twice would point a client at the wrong object.
+
+- `reserve_object_ids(conn, count)` adds to the `object` counter in `last_id`,
+  commits, and only then returns the block. It refuses to run inside a
+  transaction, because the caller's rollback would undo the reservation after
+  the ids had been seen.
+- That commit runs with `synchronous = FULL`, and the setting goes back to
+  `NORMAL` after it. In WAL mode, `NORMAL` may lose the last commits on a power
+  cut, and a lost reservation would give an id twice. The disk's own promise to
+  keep a synced write is still a limit no test here can check.
+- A crash can leave reserved ids unused. Those gaps are harmless.
+- `insert_object` refuses an id outside the reservation, and an id that the
+  reservation has already used, even after a delete. It accepts `retained_ids`,
+  for the anchors a seed keeps across runs. A test fixture that needs fixed ids
+  writes SQL into a fresh store instead. It writes a row into `object_box` only
+  for a measured box.
+- `tombstone_object` marks an object `merged` or `discarded` and keeps its row,
+  so a client holding the id still gets an answer. `merged_into` and `split_from`
+  refuse a link to itself, across maps, to a missing object, or one that makes a
+  cycle, and stop after 32 links.
+
+Nothing calls these from the node yet.
 
 ### The search indexes
 
@@ -752,6 +820,7 @@ runs the module on Python 3.12.
 | Raw detections, for re-tuning     | A `ros2 bag` of the detection topic ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)) | No |
 | The schema                        | `src/walkie_database/migrations/`           | Yes    |
 | Connection settings               | `src/walkie_database/db.py`                 | Yes    |
+| Object ids, rows and tombstones   | `src/walkie_database/objects.py`            | Yes    |
 | The map identity helper           | `src/walkie_map_id.py`                      | Yes    |
 | The node's messages and services  | `ros2_ws/src/walkie_database_msgs/`         | Yes    |
 | The walkie-vision commit they nest | `ros2_ws.repos`                            | Yes    |

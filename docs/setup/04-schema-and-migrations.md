@@ -22,9 +22,13 @@ file is missing.
 | `src/walkie_database/migrations/0001_initial.sql` | The first schema: every table, index and trigger |
 | `src/walkie_database/migrations/0002_name_vector_tables_by_weights.sql` | Renames the face and appearance vector tables after their weights ([below](#migration-0002-the-weights-in-the-name)) |
 | `src/walkie_database/migrations/0003_one_open_session_and_unique_ids.sql` | Allows at most one open session, and keeps session and person ids from being given twice ([below](#migration-0003-one-open-session)) |
+| `src/walkie_database/migrations/0004_object_lifecycle.sql` | Adds the object lifecycle fields, run identity and an object id counter ([below](#migration-0004-object-lifecycle-fields)) |
 | `src/walkie_database/migrate.py`             | Finds the migrations and applies the missing ones |
+| `src/walkie_database/objects.py`             | Reserves object ids, and writes new object rows and tombstones |
 | `tests/test_migrate.py`                      | Tests for applying, refusing and rolling back    |
 | `tests/test_schema.py`                       | Tests for what each table and index promises     |
+| `tests/test_migration_upgrades.py`           | Tests that upgrade a populated database from version 3 |
+| `tests/test_objects.py`                      | Tests for object ids, new rows and tombstones    |
 
 The tables themselves are explained in
 [The Database](../architecture/database.md).
@@ -87,9 +91,9 @@ PRAGMA user_version = 1;    -- set it
 
 ## Add a migration
 
-1. Create the next file in `src/walkie_database/migrations/`, for example
-   `0004_message_vectors.sql`. Numbers must run 1, 2, 3, ... without gaps,
-   and the name uses only lowercase letters, digits and `_`.
+1. Create the next file in `src/walkie_database/migrations/`, such as
+   `NNNN_message_vectors.sql` with the next number. Numbers must run 1, 2, 3,
+   ... without gaps, and the name uses only lowercase letters, digits and `_`.
 2. Write the SQL. Do not write `BEGIN`, `COMMIT` or `PRAGMA user_version`:
    `migrate()` adds them.
 3. Add tests to `tests/test_schema.py` for what the change promises.
@@ -214,3 +218,33 @@ that only the newest is still open, that every person stays, and that
 `last_id` starts at the largest ids. `test_only_one_session_can_be_open`
 and `test_last_id_keeps_the_largest_id_ever_given` check the index and the
 triggers.
+
+## Migration 0004: object lifecycle fields
+
+Added on 2026-11-05. `0004_object_lifecycle.sql` gives every table the columns
+object memory will write, without any of its logic
+([Object fields](../architecture/database.md#object-fields)). All of it is
+`ALTER TABLE ... ADD COLUMN` and new tables, with one exception.
+
+**`last_id` is created again.** Object ids need a counter, and the table's
+`CHECK` allowed only `session` and `person`. A `CHECK` cannot change, so the
+migration stages the counters in a temporary table, drops the two triggers and
+the table, and creates both again. Nothing has a foreign key to `last_id`, so the
+[warning above](#add-a-migration) about `DROP TABLE` does not apply. The new
+counter starts at the largest object id.
+
+**Old objects are not promoted.** An object with `source = 'map'` becomes a
+`present` anchor. Every other old object stays a `candidate`, because nothing has
+confirmed it, and `last_verified` stays empty.
+
+**Some rules are triggers.** A `CHECK` cannot read a JSON array, so the column's
+`CHECK` covers the shape of `color_shares` and two triggers cover its twelve
+values. A trigger also removes the `object_box` row when `geometry_valid` goes
+to 0.
+
+`tests/test_migration_upgrades.py` builds a populated database at version 3 and
+upgrades it. It checks the backfill, every old row and both old counters. It also
+runs the migration twice, and runs a copy that fails at its last statement, which
+must leave version 3 unchanged. `tests/test_objects.py` checks the order of the
+reservation's `PRAGMA` and `COMMIT`, and that an id is not given again after a
+delete, a restart or an unused reservation.

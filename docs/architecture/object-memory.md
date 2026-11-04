@@ -1,9 +1,11 @@
 # Object Memory (Proposed)
 
 !!! note "Proposed"
-    Nothing on this page is built yet. The tables it writes to are: `object`,
-    `object_cloud`, `object_box`, `object_clip_vit_b16` and
-    `object_observation` ([The Database](database.md)).
+    The merging on this page is not built yet. The tables it writes to are:
+    `object`, `object_cloud`, `object_box`, `object_clip_vit_b16` and
+    `object_observation` ([The Database](database.md)). Their lifecycle fields,
+    the object id allocator and tombstones are built
+    ([Object fields](database.md#object-fields)), and nothing writes them yet.
 
 Perception sees the same cup many times, from different angles, each time
 as a partial point cloud. Object memory merges those detections into one
@@ -123,6 +125,11 @@ Every few seconds, the node:
 3. **Merges** pairs of objects that overlap a lot and look similar. Two
    halves of one table, seen from different sides, become one table.
 
+A dropped or merged object keeps its row, as a tombstone with the state
+`discarded` or `merged`, and a merged one points to the winner through
+`merged_into`. Its id is never given again, so a client holding that id still
+gets an answer.
+
 ### 5. Fit the box
 
 The box is fitted with PCA on the `x` and `y` of the points only: the box
@@ -147,6 +154,13 @@ Writing on every detection would rewrite each object's whole cloud many
 times a second, for no benefit
 ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)). The cost is that a
 crash loses the last few seconds of merging.
+
+A new object's id cannot wait for that write, because the node can publish the
+id first. So the node reserves ids in blocks, in their own committed transaction,
+and a crash can leave gaps but never gives an id twice
+([Object ids and tombstones](database.md#object-ids-and-tombstones)). A new
+candidate with no depth has `geometry_valid` 0 and no row in `object_box`, so a
+search by position does not find it at a made-up place.
 
 ### Re-tune with a recording
 

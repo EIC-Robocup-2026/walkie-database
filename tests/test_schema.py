@@ -303,7 +303,7 @@ def test_last_id_keeps_the_largest_id_ever_given(db):
     db.execute("INSERT INTO person (first_seen, last_seen) VALUES (0, 0)")
 
     rows = db.execute("SELECT table_name, id FROM last_id ORDER BY table_name")
-    assert [tuple(row) for row in rows] == [("person", 5), ("session", 7)]
+    assert [tuple(row) for row in rows] == [("object", 0), ("person", 5), ("session", 7)]
 
 
 def test_migration_0003_closes_all_but_the_newest_open_session():
