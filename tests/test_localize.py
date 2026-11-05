@@ -367,6 +367,84 @@ def test_a_clock_reset_keeps_static_transforms(sim_node):
         clock.close()
 
 
+def test_a_clock_reset_of_less_than_a_second_also_clears_old_transforms(sim_node):
+    clock = SimClock(sim_node)
+    try:
+        clock.set(0.5)
+        teach(sim_node, camera_transform(0.2, (10.0, 0.0, 0.0)))
+
+        clock.set(0.0)
+        clock.set(0.2)
+
+        # The old run's pose at 0.2 s does not answer for the new run's 0.2 s.
+        response = localize(sim_node, observation(0.2, [block_of_points((0.0, 0.0, 1.0))]))
+        assert response.status.code == OK
+        assert response.results[0].status.code == TF_UNAVAILABLE
+        teach(sim_node, camera_transform(0.2, (7.0, 0.0, 0.0)))
+        result = localize(sim_node, observation(0.2, [block_of_points((0.0, 0.0, 1.0))])).results[0]
+        assert result.status.code == OK
+        assert result.centroid.point.x == pytest.approx(7.0)
+    finally:
+        clock.close()
+
+
+@pytest.mark.parametrize("back_ns", [1, 300_000_000, 1_000_000_000], ids=["1ns", "0.3s", "1s"])
+def test_any_step_back_of_the_sim_clock_clears_old_transforms(sim_node, back_ns):
+    clock = sim_node.get_clock()
+    start = RclTime(seconds=SIM_TIME)
+    clock.set_ros_time_override(start)
+    teach(sim_node, camera_transform(SIM_TIME))
+    assert sim_node._frames.buffer.can_transform_core(MAP, CAMERA, start)[0]
+
+    clock.set_ros_time_override(RclTime(nanoseconds=start.nanoseconds - back_ns))
+
+    assert not sim_node._frames.buffer.can_transform_core(MAP, CAMERA, start)[0]
+
+
+@pytest.mark.parametrize("forward_ns", [0, 1, 1_000_000_000], ids=["same", "1ns", "1s"])
+def test_a_clock_sample_that_does_not_go_back_keeps_the_transforms(sim_node, forward_ns):
+    clock = sim_node.get_clock()
+    start = RclTime(seconds=SIM_TIME)
+    clock.set_ros_time_override(start)
+    teach(sim_node, camera_transform(SIM_TIME))
+
+    clock.set_ros_time_override(RclTime(nanoseconds=start.nanoseconds + forward_ns))
+
+    assert sim_node._frames.buffer.can_transform_core(MAP, CAMERA, start)[0]
+
+
+def test_the_same_clock_sample_published_again_keeps_the_transforms(sim_node):
+    clock = SimClock(sim_node)
+    try:
+        clock.set(SIM_TIME)
+        teach(sim_node, camera_transform(SIM_TIME, (4.0, 0.0, 0.0)))
+
+        for _ in range(5):
+            clock.publisher.publish(Clock(clock=to_time(SIM_TIME)))
+            clock.executor.spin_once(timeout_sec=0.02)
+
+        result = localize(sim_node, observation(SIM_TIME, [block_of_points((0.0, 0.0, 1.0))])).results[0]
+        assert result.status.code == OK
+        assert result.centroid.point.x == pytest.approx(4.0)
+    finally:
+        clock.close()
+
+
+def test_a_first_sample_older_than_the_clock_does_not_set_it_back(sim_node):
+    # rclpy's own /clock subscription may already hold a later sample than the
+    # node's first-sample subscription. Going back to the older one would read as
+    # a reset and clear TF.
+    later = RclTime(seconds=SIM_TIME + 0.5)
+    sim_node.get_clock().set_ros_time_override(later)
+    teach(sim_node, camera_transform(SIM_TIME + 0.5))
+
+    sim_node._on_first_clock(Clock(clock=to_time(SIM_TIME)))
+
+    assert not sim_node._waiting_for_clock
+    assert sim_node._frames.buffer.can_transform_core(MAP, CAMERA, later)[0]
+    assert sim_node.get_clock().now().nanoseconds == later.nanoseconds
+
+
 # The listener ----------------------------------------------------------------
 
 

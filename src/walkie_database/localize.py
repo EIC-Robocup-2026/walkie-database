@@ -29,9 +29,14 @@ from walkie_database.geometry import rotate
 from walkie_database.ingress import cloud_points
 
 LOOKUP_TIMEOUT = Duration(seconds=0.05)
-# A jump back of a second or more means that the sim restarted, or the wall clock was
-# set back. Old transforms must not answer for the same times in the new run.
-_BACKWARD_JUMP = JumpThreshold(min_forward=None, min_backward=Duration(seconds=-1), on_clock_change=True)
+# Any jump back of the clock, however small, means that the sim restarted. Old
+# transforms must not answer for the same times in the new run, and a run that
+# restarts early repeats times less than a second apart. tf2_ros's Python Buffer
+# waits for a jump of a second. Its C++ Buffer takes any jump back, as this does.
+# rcl reports a jump only when ROS time is set, which under use_sim_time is each
+# /clock sample, so a sample equal to the one before is no jump. The wall clock
+# reports none.
+_BACKWARD_JUMP = JumpThreshold(min_forward=None, min_backward=Duration(nanoseconds=-1), on_clock_change=True)
 
 
 class FrameSource:

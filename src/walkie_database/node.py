@@ -482,7 +482,11 @@ class DatabaseNode(Node):
             self.get_logger().error(f"Could not stamp the seeded anchors: {e}")
             return
         # rclpy's own subscription may not have this sample yet, and _now must not read 0.
-        self.get_clock().set_ros_time_override(rclpy.time.Time.from_msg(message.clock))
+        # It may also have a later one already. Going back to this sample would read
+        # as a sim reset, which clears TF.
+        stamp = rclpy.time.Time.from_msg(message.clock)
+        if stamp > self.get_clock().now():
+            self.get_clock().set_ros_time_override(stamp)
         self._waiting_for_clock = False
         self.destroy_subscription(self._first_clock)
         self._first_clock = None

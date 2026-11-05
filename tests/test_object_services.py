@@ -11,6 +11,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.time import Time as RclTime
 from rosgraph_msgs.msg import Clock
 from seed_helpers import dump_rows, map_id_of, write_map_folder
 from std_msgs.msg import String
@@ -535,6 +536,23 @@ def test_the_store_status_needs_no_clock(sim_node):
     response = sim_node.get_store_status(GetStoreStatus.Request(), GetStoreStatus.Response())
     assert response.status.code == OK
     assert response.clock_kind == "ros_sim"
+
+
+def test_after_a_short_sim_reset_an_event_has_no_pose_from_the_old_run(sim_node):
+    sim_node._on_first_clock(Clock(clock=to_time(0.5)))
+    sim_node._frames.buffer.set_transform(camera_transform(0.2, (1.0, 1.0, 0.0), child=ROBOT), "test")
+    sim_node.get_clock().set_ros_time_override(RclTime(seconds=0.0))
+    sim_node.get_clock().set_ros_time_override(RclTime(seconds=0.2))
+
+    request = RememberEvent.Request(
+        request_id="r1", task_id="t1", cause="a test", kind="action", text="Put the cup on the table."
+    )
+    response = sim_node.remember_event(request, RememberEvent.Response())
+
+    assert response.status.code == OK
+    assert response.event.stamp == to_time(0.2)
+    assert not response.event.has_robot_pose
+    assert response.event.room_id == 0
 
 
 # The snapshot ----------------------------------------------------------------

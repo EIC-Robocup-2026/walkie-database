@@ -135,9 +135,12 @@ Between two transforms, TF interpolates. A stamp before the oldest or after the
 newest gets no answer, and never the nearest or the latest transform. A failed entry
 leaves `centroid` at its default and `points_used` at 0, so check its status first.
 
-A clock that jumps back a second or more clears the buffer's dynamic transforms, so a
-restarted simulation cannot read poses from its previous run. Static transforms stay,
-because they do not depend on time.
+Under `use_sim_time`, any `/clock` sample earlier than the node's time, even by a
+nanosecond, clears the buffer's dynamic transforms. So a restarted simulation cannot
+read poses from its previous run, also when it restarts within its first second. The
+same sample again, or a later one, keeps them. Static transforms stay, because they do
+not depend on time. The robot pose of an event or a frame query comes from the same
+buffer. On the wall clock, rcl reports no jump, so nothing is cleared.
 
 !!! info "The message lives in walkie-vision"
     The node receives this type and does not own it, so it stays in its
