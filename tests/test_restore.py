@@ -18,7 +18,9 @@ from seed_helpers import (
 from walkie_database import restore as restore_tool
 from walkie_database import seed_store
 from walkie_database.db import connect, transaction
+from walkie_database.events import REMEMBER_EVENT
 from walkie_database.migrate import migrate
+from walkie_database.object_context import add_event, record_write
 from walkie_database.people import Refused
 from walkie_database.restore import main, restore
 from walkie_database.store_lock import StoreLock
@@ -135,14 +137,49 @@ def test_the_cli_restores_and_reports(seed, db, folder, capsys):
 
 def test_each_counter_takes_the_larger_of_the_store_and_the_seed(seed, db, folder):
     restore(seed, db, folder, "wall")
-    set_counters(seed, object=500, person=3)
-    set_counters(db, object=20, person=40, session=70)
+    set_counters(seed, object=500, person=3, event=2)
+    set_counters(db, object=20, person=40, session=70, event=80)
 
     restored = restore(seed, db, folder, "wall")
 
-    expected = {"object": 500, "person": 40, "session": 70}
+    expected = {"object": 500, "person": 40, "session": 70, "event": 80}
     assert restored.counters == expected
     assert {name: counters(db)[name] for name in expected} == expected
+
+
+def test_an_event_id_is_not_given_again_after_a_restore(seed, db, folder):
+    map_id = restore(seed, db, folder, "wall").map_id
+    conn = connect(db)
+    with transaction(conn):
+        last = add_event(conn, map_id, "note", "Opened a door.", 1.0)
+    conn.close()
+
+    restore(seed, db, folder, "wall")
+
+    conn = connect(db)
+    with transaction(conn):
+        assert add_event(conn, map_id, "note", "Opened a door.", 1.0) == last + 1
+    conn.close()
+
+
+def test_a_store_from_before_the_event_counter_keeps_its_event_ids(seed, db, folder):
+    # Migration 0007 added the event counter. A store at schema 6 has none, and its
+    # ledger may name a line that a forgotten session took with it.
+    map_id = restore(seed, db, folder, "wall").map_id
+    conn = connect(db)
+    with transaction(conn):
+        conn.execute("DELETE FROM last_id WHERE table_name = 'event'")
+        conn.execute(
+            "INSERT INTO event (id, ts, kind, text, map_id) VALUES (5, 1, 'note', 'kept', ?)", (map_id,)
+        )
+        record_write(conn, "r1", "t1", REMEMBER_EVENT, {"line": 9}, {"event_id": 9, "ts": 2.0}, 2.0)
+    conn.execute("PRAGMA user_version = 6")
+    conn.close()
+
+    restored = restore(seed, db, folder, "wall")
+
+    assert restored.counters["event"] == 9
+    assert counters(db)["event"] == 9
 
 
 def _crash_with_a_wal_counter(db):

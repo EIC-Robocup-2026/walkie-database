@@ -7,11 +7,13 @@ import numpy as np
 import pytest
 
 from walkie_database.db import connect, transaction
+from walkie_database.events import REMEMBER_EVENT
 from walkie_database.migrate import Migration, load_migrations, migrate, schema_version
 from walkie_database.object_context import (
     add_event,
     add_surface,
     find_events,
+    record_write,
     relations,
     room_at,
     room_by_key,
@@ -521,7 +523,96 @@ def test_0006_that_fails_is_also_undone_after_a_restart(tmp_path, v3):
     reopened.close()
 
 
-@pytest.mark.parametrize("version", [4, 5, 6])
+# Migration 0007 --------------------------------------------------------------
+
+
+def counters(conn) -> list[tuple]:
+    return [tuple(row) for row in conn.execute("SELECT table_name, id FROM last_id ORDER BY table_name")]
+
+
+def forget_the_newest_line(conn) -> int:
+    """At schema 6: a kept line, then a guest's line that the ledger names and a forget deletes."""
+    with transaction(conn):
+        add_event(conn, MAP_ID, "note", "robot moved", 11.0)
+        guest = add_event(conn, MAP_ID, "note", "guest waved", 12.0, person_id=2, session_id=3)
+        outcome = {"event_id": guest, "ts": 12.0}
+        record_write(conn, "r1", "t1", REMEMBER_EVENT, {"line": "guest"}, outcome, 12.0)
+    end_session(conn, 3)
+    return guest
+
+
+def test_0007_starts_the_event_counter_above_every_event_and_every_id_the_ledger_gave(v3):
+    upgraded(v3, 6)
+    guest = forget_the_newest_line(v3)
+    with transaction(v3):
+        # Only an integer event_id of remember_event counts.
+        record_write(v3, "r2", "t1", "set_object_state", {}, {"event_id": 900}, 13.0)
+        record_write(v3, "r3", "t1", REMEMBER_EVENT, {"line": "odd"}, {"event_id": "800", "ts": 13.0}, 13.0)
+    # The ledger names an id that no row has any more.
+    assert v3.execute("SELECT max(id) FROM event").fetchone()[0] == guest - 1
+
+    upgraded(v3, 7)
+
+    assert counters(v3) == [("event", guest), ("object", FAR_LAMP), ("person", 6), ("session", 9)]
+    with transaction(v3):
+        assert add_event(v3, MAP_ID, "note", "opened a door", 12.0) == guest + 1
+
+
+def test_0007_keeps_every_counter_trigger_working(v3):
+    upgraded(v3, 7)
+    with transaction(v3):
+        v3.execute("INSERT INTO session (id, started_at, ended_at) VALUES (20, 0, 1)")
+        v3.execute("INSERT INTO person (id, first_seen, last_seen) VALUES (21, 0, 0)")
+        v3.execute(
+            """INSERT INTO object (id, map_id, label, center_x, center_y, center_z,
+                                   size_x, size_y, size_z, first_seen, last_seen)
+               VALUES (50, ?, 'bottle', 0, 0, 0, 0, 0, 0, 0, 0)""",
+            (MAP_ID,),
+        )
+        v3.execute("INSERT INTO event (id, ts, kind, text, map_id) VALUES (22, 0, 'note', 'x', ?)", (MAP_ID,))
+    assert counters(v3) == [("event", 22), ("object", 50), ("person", 21), ("session", 20)]
+
+
+def test_0007_twice_changes_nothing(tmp_path, v3):
+    upgraded(v3, 6)
+    forget_the_newest_line(v3)
+    upgraded(v3, 7)
+    before = snapshot(v3)
+    assert upgraded(v3, 7) is v3
+    assert snapshot(v3) == before
+    v3.close()
+    reopened = connect(tmp_path / "walkie.db")
+    assert upgraded(reopened, 7) is reopened
+    assert snapshot(reopened) == before
+    reopened.close()
+
+
+def test_0007_that_fails_at_the_end_leaves_schema_6_unchanged(tmp_path, v3):
+    upgraded(v3, 6)
+    guest = forget_the_newest_line(v3)
+    before = snapshot(v3)
+    migrations = load_migrations()
+
+    with pytest.raises(sqlite3.OperationalError, match="no_such_table"):
+        migrate(v3, [*migrations[:6], failing_copy(tmp_path, migrations[6])])
+
+    assert schema_version(v3) == 6
+    assert snapshot(v3) == before
+    assert not v3.in_transaction
+    assert v3.execute("SELECT count(*) FROM sqlite_temp_master").fetchone()[0] == 0
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        v3.execute("INSERT INTO last_id (table_name, id) VALUES ('event', 0)")
+    v3.close()
+    reopened = connect(tmp_path / "walkie.db")
+    assert snapshot(reopened) == before
+
+    # The real migration still runs afterwards.
+    upgraded(reopened, 7)
+    assert ("event", guest) in counters(reopened)
+    reopened.close()
+
+
+@pytest.mark.parametrize("version", [4, 5, 6, 7])
 def test_an_upgrade_and_a_new_database_end_with_the_same_schema(v3, version):
     upgraded(v3, version)
     fresh = connect(":memory:")

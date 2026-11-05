@@ -8,8 +8,10 @@ is stopped (ADR-0023). A restored store is the seed's rows plus new run metadata
 is not a copy of the seed's bytes:
 
 * It gets a fresh ``store_id``, so a client can tell this run from the last one.
-* It carries the largest object, person and session counters of the outgoing store
-  and the seed, so no ID is ever given twice on this map (ADR-0020).
+* It carries the largest object, person, session and event counters of the outgoing
+  store and the seed, so no ID is ever given twice on this map (ADR-0020). A store
+  from before migration 0007 has no event counter, so the largest event ID in its log
+  or its ledger stands in for it.
 * It sets ``refresh_anchors_pending``, so the node stamps the anchors once, on its
   first clock sample.
 * It has no request ledger, because a seed has none. A retry from before the restore
@@ -35,7 +37,7 @@ from walkie_database.db import connect, transaction
 from walkie_database.map_config import CLOCK_KINDS, MapFolder, check_store, read_map_folder
 from walkie_database.migrate import load_migrations, schema_version
 from walkie_database.people import Refused
-from walkie_database.seed_store import COUNTERS, REFUSALS, check_seed_contents
+from walkie_database.seed_store import COUNTERS, REFUSALS, check_seed_contents, read_counters
 from walkie_database.store_lock import (
     StoreLock,
     checkpoint_closed_store,
@@ -45,11 +47,6 @@ from walkie_database.store_lock import (
     side_file,
     temp_beside,
 )
-
-
-def _counters(conn: sqlite3.Connection) -> dict[str, int]:
-    rows = {row["table_name"]: row["id"] for row in conn.execute("SELECT * FROM last_id")}
-    return {name: rows.get(name, 0) for name in COUNTERS}
 
 
 def _quick_check(conn: sqlite3.Connection, what: object) -> None:
@@ -91,7 +88,7 @@ def _read_outgoing(db: Path, map_id: str, clock_kind: str) -> dict[str, int]:
             raise Refused(f"The store {db} holds the map {meta['map_id']!r}, not {map_id!r}.")
         if meta["clock_kind"] != clock_kind:
             raise Refused(f"The store {db} runs on the clock {meta['clock_kind']!r}, not {clock_kind!r}.")
-        return _counters(conn)
+        return read_counters(conn)
 
 
 @dataclass(frozen=True)
@@ -117,7 +114,7 @@ def restore(seed: str | Path, db: str | Path, map_folder: str | Path, clock_kind
     with closing(connect(seed_path, readonly=True)) as seed_conn:
         # Everything about the seed is checked first, because a lock file is a write.
         map_id = check_seed(seed_conn, seed_path, folder, clock_kind)["id"]
-        counters = _counters(seed_conn)
+        counters = read_counters(seed_conn)
         with StoreLock(target):
             if target.exists():
                 checkpoint_closed_store(target)

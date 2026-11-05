@@ -592,7 +592,7 @@ def test_bad_color_shares_are_refused_on_update(store, cup, shares):
     assert stored == json.dumps(SHARES)
 
 
-def test_last_id_names_only_the_three_counters(store):
+def test_last_id_names_only_its_four_counters(store):
     with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
         store.execute("INSERT INTO last_id (table_name, id) VALUES ('room', 0)")
 
