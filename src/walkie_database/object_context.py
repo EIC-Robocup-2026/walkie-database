@@ -15,7 +15,7 @@ import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 
-from walkie_database.objects import require_transaction
+from walkie_database.objects import MAX_LINK_HOPS, require_transaction
 from walkie_database.people import Refused
 
 ON, INSIDE = "on", "inside"
@@ -79,6 +79,42 @@ def open_ring(outline: Sequence[Sequence[float]], where: str) -> list[list[float
     if area == 0:
         raise Refused(f"{where} has no area.")
     return points
+
+
+# Current objects -------------------------------------------------------------
+
+
+def current_object(conn: sqlite3.Connection, map_id: str, object_id: int) -> sqlite3.Row:
+    """The row that *object_id* stands for now, following merged tombstones to the winner.
+
+    A client may hold an id from before a merge, so an id that was merged still
+    answers. A tombstone that was discarded is its own current row. An unknown id is
+    NOT_FOUND. A broken link or a cycle raises ValueError, because it is the store's
+    fault and not the caller's.
+    """
+    if object_id <= 0:
+        raise Rejected("INVALID", f"An object id is positive, not {object_id}.")
+    visited: set[int] = set()
+    current = object_id
+    while True:
+        row = conn.execute("SELECT * FROM object WHERE id = ?", (current,)).fetchone()
+        if row is None and current == object_id:
+            raise Rejected("NOT_FOUND", f"Object {object_id} does not exist.")
+        if row is not None and row["map_id"] != map_id and current == object_id:
+            raise Rejected("WRONG_MAP", f"Object {object_id} is not on the map {map_id}.")
+        if row is None or row["map_id"] != map_id:
+            raise ValueError(f"object {object_id} links to object {current}, which is not on its map")
+        target = row["merged_into"]
+        if target is None:
+            if row["state"] == "merged":
+                raise ValueError(f"object {current} was merged, and names no winner")
+            return row
+        visited.add(current)
+        if target in visited:
+            raise ValueError(f"object {object_id} is in a cycle of merged objects, at {target}")
+        if len(visited) > MAX_LINK_HOPS:
+            raise ValueError(f"object {object_id} has over {MAX_LINK_HOPS} merge links")
+        current = target
 
 
 # Rooms -----------------------------------------------------------------------

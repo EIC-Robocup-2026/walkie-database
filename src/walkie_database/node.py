@@ -27,6 +27,19 @@ processes read through its topics and services:
     The centroid in the map of each detection of an array, with TF at the array's
     stamp. It stores nothing (ADR-0019).
 
+``~/search_objects``, ``~/get_object``, ``~/find_near``, ``~/list_rooms`` and ``~/get_room_contents``
+    Reads of what the store holds, through ObjectRepository (ADR-0021).
+
+``~/remember_event`` and ``~/find_events``
+    The task's log. The node adds the clock, the robot's pose and its room (ADR-0022).
+
+``~/get_store_status``
+    What this store is and what is switched on. It answers in either mode.
+
+``~/objects/snapshot`` (``std_msgs/String``)
+    The store's objects as JSON, published once when the anchors are stamped. Only
+    memory mode publishes it. Transient local, so a late subscriber still gets it.
+
 ``~/set_object_state``, ``~/report_sighting``, ``~/arena_reset``,
 ``~/submit_detections`` and ``~/describe_object``
     Their types are final, and they answer NOT_READY until the object memory
@@ -56,14 +69,12 @@ in a simulation they are sim time.
 from __future__ import annotations
 
 import functools
-import math
 import sqlite3
 import uuid
 from contextlib import closing
 from pathlib import Path
 
 import rclpy
-from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Point, Quaternion, Vector3
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 from rclpy.executors import ExternalShutdownException
@@ -71,6 +82,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosgraph_msgs.msg import Clock
+from std_msgs.msg import String
 from walkie_database_msgs.msg import (
     Fact,
     ModelInfo,
@@ -83,11 +95,19 @@ from walkie_database_msgs.srv import (
     ArenaReset,
     DescribeObject,
     EndSession,
+    FindEvents,
+    FindNear,
     FindObjects,
+    GetObject,
+    GetRoomContents,
+    GetStoreStatus,
+    ListRooms,
     LocalizeObjects,
     MatchPeople,
+    RememberEvent,
     RememberPerson,
     ReportSighting,
+    SearchObjects,
     SetObjectState,
     StartSession,
     SubmitDetections,
@@ -96,6 +116,8 @@ from walkie_vision_msgs.msg import ObjectDetectionArray
 
 from walkie_database import people
 from walkie_database.db import connect, transaction
+from walkie_database.events import NewEvent
+from walkie_database.geometry import FramePose
 from walkie_database.ingress import ObservationSlot, check_observation
 from walkie_database.localize import FrameSource, localize
 from walkie_database.map_config import (
@@ -109,6 +131,19 @@ from walkie_database.map_config import (
 from walkie_database.migrate import migrate
 from walkie_database.object_context import Rejected, WriteConflict
 from walkie_database.objects import OBJECT
+from walkie_database.queries import DEFAULT_THING_COSINE, ObjectRepository
+from walkie_database.results import (
+    cloud_message,
+    event_message,
+    object_match,
+    object_summary,
+    prior_message,
+    room_summary,
+    snapshot_text,
+    surface_message,
+    to_query,
+)
+from walkie_database.results import to_time as _time
 from walkie_database.store_lock import StoreLock, StoreLocked
 
 # max_results of FindObjects and MatchPeople when the caller sends 0, and the
@@ -117,10 +152,9 @@ from walkie_database.store_lock import StoreLock, StoreLocked
 DEFAULT_MAX_RESULTS = 10
 MAX_RESULTS_LIMIT = 100
 
-# The ranges of builtin_interfaces/Time.sec (int32) and of
-# RememberedObject.n_detections (uint32).
-_INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
+# The range of RememberedObject.n_detections and of the status counters (uint32).
 _UINT32_MAX = 2**32 - 1
+_NANOSEC_PER_S = 1_000_000_000
 
 # Every position query filters by map (ADR-0008). An empty label matches
 # every object. COLLATE NOCASE compares ASCII letters ignoring case, so "Cup"
@@ -151,6 +185,13 @@ _OBSERVATION_QOS = QoSProfile(
     depth=1,
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
+)
+# A late subscriber, such as a baseline overlay, still gets the seeded boxes.
+_SNAPSHOT_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
 )
 _REJECTED_LOG_PERIOD_S = 5.0
 _MAX_STATUS_MESSAGE = 512
@@ -212,6 +253,9 @@ class DatabaseNode(Node):
         self._observations: ObservationSlot | None = None
         self._map_frame = ""
         self._object_models: dict[str, int] = {}
+        # The only way a query handler reaches the store (ADR-0021).
+        self._objects: ObjectRepository | None = None
+        self._snapshot_publisher = None
         try:
             self._start()
         except BaseException:
@@ -233,6 +277,10 @@ class DatabaseNode(Node):
         objects_topic = self.declare_parameter(
             "objects_topic", "/walkie_vision/objects", _READ_ONLY
         ).value
+        reference_frames = self.declare_parameter(
+            "reference_frames", ["base_footprint"], _READ_ONLY
+        ).value
+        robot_frame = self.declare_parameter("robot_frame", "base_footprint", _READ_ONLY).value
         self.memory_enabled = memory
         self._sim_time = bool(self.get_parameter("use_sim_time").value)
         self.add_on_set_parameters_callback(self._keep_clock)
@@ -273,6 +321,14 @@ class DatabaseNode(Node):
         self.create_service(MatchPeople, "~/match_faces", self.match_faces)
         self.create_service(MatchPeople, "~/match_appearances", self.match_appearances)
         self.create_service(LocalizeObjects, "~/localize_objects", self.localize_objects)
+        self.create_service(SearchObjects, "~/search_objects", self.search_objects)
+        self.create_service(GetObject, "~/get_object", self.get_object)
+        self.create_service(FindNear, "~/find_near", self.find_near)
+        self.create_service(ListRooms, "~/list_rooms", self.list_rooms)
+        self.create_service(GetRoomContents, "~/get_room_contents", self.get_room_contents)
+        self.create_service(RememberEvent, "~/remember_event", self.remember_event)
+        self.create_service(FindEvents, "~/find_events", self.find_events)
+        self.create_service(GetStoreStatus, "~/get_store_status", self.get_store_status)
         for service_type, name in (
             (SetObjectState, "set_object_state"),
             (ReportSighting, "report_sighting"),
@@ -283,6 +339,58 @@ class DatabaseNode(Node):
             self.create_service(service_type, f"~/{name}", self._not_built)
         if memory:
             self._start_observations(objects_topic)
+            self._objects = ObjectRepository(
+                self.conn,
+                map_id=self._map_id_parameter(),
+                frame_id=self._map_frame,
+                locate=self._locate,
+                reference_frames=reference_frames,
+                robot_frame=robot_frame,
+                thing_cosine=self._read_thing_cosines(),
+            )
+            self._snapshot_publisher = self.create_publisher(
+                String, "~/objects/snapshot", _SNAPSHOT_QOS
+            )
+            if not self._sim_time:
+                self._publish_snapshot(self._now())
+        else:
+            self._objects = ObjectRepository(self.conn)
+
+    def _read_thing_cosines(self) -> dict[str, float]:
+        """Per model, the cosine that stands in for a thing's words. A value that cannot be one stops the start."""
+        thresholds = {}
+        for model in sorted(self._object_models):
+            name = f"thing_cosine.{model}"
+            value = self.declare_parameter(name, DEFAULT_THING_COSINE, _READ_ONLY).value
+            if not -1.0 <= value <= 1.0:
+                raise MapGateError(f"{name} is a cosine from -1 to 1, not {value}.")
+            thresholds[model] = value
+        return thresholds
+
+    def _publish_snapshot(self, now: float) -> None:
+        """Publish the store as seeded. A failure is logged, and the services stay up."""
+        try:
+            text = snapshot_text(
+                self._objects.snapshot(now), sequence=self.publication_sequence, now=now
+            )
+        except (sqlite3.Error, ValueError) as e:
+            self.get_logger().error(f"Could not build the object snapshot: {e}")
+            return
+        self._snapshot_publisher.publish(String(data=text))
+
+    def _locate(self, frame: str, now: float) -> FramePose | None:
+        """Where *frame* is in the map at exactly *now*, or None. Never the latest instead.
+
+        Time 0 means the latest transform to tf2, so a sim at time 0 has no answer.
+        """
+        if now <= 0:
+            return None
+        stamp = rclpy.time.Time.from_msg(_time(now, "the node's clock has the time"))
+        found = self._frames.lookup(self._map_frame, frame, stamp)
+        if found is None:
+            return None
+        t, r = found.transform.translation, found.transform.rotation
+        return FramePose((t.x, t.y, t.z), (r.x, r.y, r.z, r.w))
 
     def _start_observations(self, objects_topic: str) -> None:
         """Read what never changes while the node runs, then listen for arrays and TF.
@@ -378,6 +486,8 @@ class DatabaseNode(Node):
         self._waiting_for_clock = False
         self.destroy_subscription(self._first_clock)
         self._first_clock = None
+        if self.memory_enabled:
+            self._publish_snapshot(message.clock.sec + message.clock.nanosec / 1e9)
 
     def _stamp_seeded_anchors(self, now: float) -> None:
         """Stamp the anchors and clear the flag together, in one transaction."""
@@ -431,6 +541,123 @@ class DatabaseNode(Node):
             request.objects, models=self._object_models, map_frame=self._map_frame, now=now
         )
         response.results = localize(request.objects, map_frame=self._map_frame, frames=self._frames)
+
+    @_status_handler("search the objects")
+    def search_objects(self, request, response) -> None:
+        now = self._memory_now()
+        self._check_map(request.query.map_id)
+        vector = (request.vector.model, request.vector.embedding) if request.use_embedding else None
+        found = self._objects.search(
+            to_query(request.query),
+            vector=vector,
+            text=request.text,
+            max_results=request.max_results,
+            now=now,
+        )
+        matches = [object_match(match) for match in found.matches]
+        response.matches = matches
+        response.priors = [prior_message(prior) for prior in found.priors]
+        response.lexical_only = found.lexical_only
+        response.truncated = found.truncated
+
+    @_status_handler("read the object")
+    def get_object(self, request, response) -> None:
+        now = self._memory_now()
+        self._check_map(request.map_id)
+        found = self._objects.get_object(
+            request.object_id, include_cloud=request.include_cloud, now=now
+        )
+        summary = object_summary(found.record)
+        surfaces = [surface_message(surface) for surface in found.surfaces]
+        cloud = cloud_message(found.cloud, self._map_frame) if found.cloud is not None else None
+        response.requested_id = found.requested_id
+        response.merged = found.merged
+        response.object = summary
+        response.surfaces = surfaces
+        if cloud is not None:
+            response.cloud = cloud
+
+    @_status_handler("find the nearby objects")
+    def find_near(self, request, response) -> None:
+        now = self._memory_now()
+        self._check_map(request.query.map_id)
+        found = self._objects.find_near(
+            to_query(request.query), max_results=request.max_results, now=now
+        )
+        response.matches = [object_match(match) for match in found.matches]
+        response.truncated = found.truncated
+
+    @_status_handler("list the rooms")
+    def list_rooms(self, request, response) -> None:
+        self._memory_now()
+        self._check_map(request.map_id)
+        response.rooms = [room_summary(room, self._map_frame) for room in self._objects.rooms()]
+
+    @_status_handler("read the room's contents")
+    def get_room_contents(self, request, response) -> None:
+        now = self._memory_now()
+        self._check_map(request.query.map_id)
+        room, found = self._objects.room_contents(
+            to_query(request.query), max_results=request.max_results, now=now
+        )
+        summary = room_summary(room, self._map_frame)
+        objects = [object_match(match) for match in found.matches]
+        response.room = summary
+        response.objects = objects
+        response.truncated = found.truncated
+
+    @_status_handler("remember the event")
+    def remember_event(self, request, response) -> None:
+        now = self._memory_now()
+        self._check_map(request.map_id)
+        event = self._objects.remember_event(
+            NewEvent(
+                request_id=request.request_id,
+                task_id=request.task_id,
+                cause=request.cause,
+                kind=request.kind,
+                text=request.text,
+                object_id=request.object_id,
+                person_id=request.person_id,
+                session_id=request.session_id,
+            ),
+            now=now,
+        )
+        response.event = event_message(event, self._map_frame)
+
+    @_status_handler("find the events")
+    def find_events(self, request, response) -> None:
+        self._memory_now()
+        self._check_map(request.map_id)
+        since = None
+        if request.has_since:
+            if request.since.nanosec >= _NANOSEC_PER_S:
+                raise Rejected("INVALID", f"since has nanosec {request.since.nanosec}.")
+            since = request.since.sec + request.since.nanosec / _NANOSEC_PER_S
+        events, truncated = self._objects.find_events(
+            text=request.text, since=since, room=request.room, max_results=request.max_results
+        )
+        response.events = [event_message(event, self._map_frame) for event in events]
+        response.truncated = truncated
+
+    @_status_handler("read the store's status")
+    def get_store_status(self, _request, response) -> None:
+        """Answers in either mode and needs no clock. It is how a client learns the mode."""
+        status = self._objects.store_status()
+        response.map_id = self._map_id_parameter()
+        response.map_hash = status.map_hash
+        response.baseline_rev = status.baseline_rev
+        response.store_id = status.store_id
+        response.clock_kind = ROS_SIM if self._sim_time else WALL
+        response.schema_version = status.schema_version
+        response.map_valid = self.memory_enabled
+        # Nothing feeds the object memory, and no caption is made, in this stage.
+        response.ingest_enabled = False
+        response.captions_enabled = False
+        response.object_embedding_models = status.models
+        if self._observations is not None:
+            response.arrays_received = min(self._observations.received, _UINT32_MAX)
+            response.arrays_rejected = min(self._observations.rejected, _UINT32_MAX)
 
     def find_objects(
         self, request: FindObjects.Request, response: FindObjects.Response
@@ -709,20 +936,6 @@ def _forgot(session_id: int, n: int) -> str:
 
 def _count(n: int, noun: str) -> str:
     return f"no {noun}s" if n == 0 else f"1 {noun}" if n == 1 else f"{n} {noun}s"
-
-
-def _time(seconds: float, what: str) -> Time:
-    """Seconds since the Unix epoch as a builtin_interfaces/Time.
-
-    *what* names the value for the error, for example "object 4 has
-    last_seen".
-    """
-    if not math.isfinite(seconds) or not _INT32_MIN <= math.floor(seconds) <= _INT32_MAX:
-        raise ValueError(f"{what} {seconds!r}, which builtin_interfaces/Time cannot hold")
-    # floor, not int: Time.nanosec is never negative, also before 1970.
-    sec = math.floor(seconds)
-    # Rounding can reach a whole second, and nanosec must stay below one.
-    return Time(sec=sec, nanosec=min(round((seconds - sec) * 1e9), 999_999_999))
 
 
 def main() -> None:

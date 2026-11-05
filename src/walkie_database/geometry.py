@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 Vector = tuple[float, float, float]
 Quaternion = tuple[float, float, float, float]
@@ -31,6 +32,19 @@ def rotate_back(rotation: Sequence[float], point: Sequence[float]) -> Vector:
     """*point* turned by the inverse of the unit quaternion *rotation*."""
     x, y, z, w = rotation
     return rotate((-x, -y, -z, w), point)
+
+
+@dataclass(frozen=True)
+class FramePose:
+    """Where a frame is in the map, at one time."""
+
+    position: Vector
+    orientation: Quaternion
+
+    def local(self, point: Sequence[float]) -> Vector:
+        """A map point, in this frame."""
+        px, py, pz = self.position
+        return rotate_back(self.orientation, (point[0] - px, point[1] - py, point[2] - pz))
 
 
 def yaw_of(rotation: Sequence[float]) -> float:

@@ -15,6 +15,10 @@ would corrupt any name that really has an underscore.
 A stored edge for every nearby pair goes stale as soon as an object's box moves.
 An edge to an anchor with no measured box says something nobody can check.
 
+A search that keeps the nearest few vectors first and filters them after can lose a
+valid answer, such as the right cup in the right room behind twenty near-copies in
+another room.
+
 **Decision**
 
 - `room.key` is the machine name, and it is unique in its map when set. `room.name`
@@ -37,10 +41,25 @@ An edge to an anchor with no measured box says something nobody can check.
   anchor. An `inside` row names only the anchor. Triggers check that a row stays on
   one map and that its surface belongs to its anchor. A row cannot be pointed
   elsewhere: delete it and insert a new one.
-- `near` and `in_room` have no rows. They are to be computed from `object_box` and the
-  room when asked. That code arrives with the object services.
+- `near` and `in_room` have no rows. `queries.py` computes them when asked: `near`
+  from `object_box` and the box centres, `in_room` from `object.room_id`.
 - Nothing infers a relation yet. The helpers record what a caller states, and refuse
   what the schema or the anchor's geometry cannot hold.
+- `ObjectRepository` in `queries.py` is the only way a query handler reaches the
+  store. It holds the node's connection, so its SQL runs on the executor's thread.
+  A later writer thread can replace what is behind it without changing a handler.
+- A search applies every hard filter to every row of the map before it ranks or
+  cuts. Vector similarity is an exact cosine over the map's vectors of that model,
+  not a KNN that keeps the nearest few and filters after.
+- The belief is computed at read time, from `p_exist` and the age of
+  `last_verified`, and never stored. Age alone never changes a state.
+- An attribute matches, is unknown, or differs. A mismatch comes back only when
+  nothing else passed. The score weights, the half-lives and the CLIP cosine of
+  0.25 are prototype defaults, and the cosine is a parameter per model.
+- A distance or direction needs a frame from an allow-list, looked up in TF at the
+  node's time. A request cannot send a pose.
+- A catalogue item that no current object stands for comes back as a prior,
+  separate from matches and with no id.
 
 **Consequences**
 
@@ -56,8 +75,16 @@ An edge to an anchor with no measured box says something nobody can check.
   millimetre in a building. Crossing edges are not detected.
 - A catalogue link is checked for its map in the helper, not in a trigger, so raw SQL
   can write a link across maps.
+- The exact scan costs CPU on every search. Over 500 synthetic objects it took tens
+  of milliseconds on a laptop, outside a running node. A faster plan must keep the
+  same answers.
+- A query that needs TF waits up to 50 ms for it on the executor's thread, and
+  other requests wait behind it.
+- The ranking constants are not tuned on real phrases. A recorded benchmark can
+  change them without changing the types.
 
 **See also:** [The tables](/architecture/database.md#the-tables),
 [Rooms, surfaces and relations](/architecture/database.md#rooms-surfaces-and-relations),
+[Object queries](/architecture/database.md#object-queries),
 [ADR-0022](/architecture/decisions/0022-task-event-log.md)
 <!-- --8<-- [end:body] -->

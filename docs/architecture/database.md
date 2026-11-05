@@ -54,6 +54,10 @@ them by meaning, by position and by words.
 - **Only `on` and `inside` are stored.** Rooms, surfaces, the catalogue and those
   two relations are rows. `near` and `in_room` are computed when asked
   ([ADR-0021](decisions/0021-rooms-and-object-queries.md)).
+- **Queries filter every row, then rank.** A search applies all its filters to
+  the whole map before it ranks or cuts, and it computes each object's belief at
+  read time. It invents no fusion
+  ([Object queries](#object-queries)).
 - **The task's log forgets with the session.** A line that names a person goes
   with that person's session, and is not left with an empty link
   ([ADR-0022](decisions/0022-task-event-log.md)).
@@ -69,9 +73,12 @@ them by meaning, by position and by words.
     and the people and session services
     ([The node's interface](#the-nodes-interface)). Offline tools build and restore
     a store ([Seeds, restore and the map gate](#seeds-restore-and-the-map-gate)). In
-    memory mode, the node also receives and checks observations and localizes them
-    ([The object contract](#the-object-contract)). The other topics and services
-    below are the plan, starting with [object memory](object-memory.md).
+    memory mode, the node also receives and checks observations and localizes them,
+    answers the object reads and the task's log from the stored rows, and publishes
+    the seeded snapshot ([The object contract](#the-object-contract)). Nothing merges
+    detections into objects yet, so the writes answer `NOT_READY`. The markers, the
+    collision boxes and the update stream are the plan, starting with
+    [object memory](object-memory.md).
 
 ```mermaid
 flowchart LR
@@ -115,6 +122,9 @@ nests, and `pixi run build-msgs` builds both
 | `map_folder` | empty         | The folder with `map.yaml`, its image and an optional `manifest.yaml`. Required in memory mode, and ignored otherwise. Read-only. |
 | `use_sim_time` | false       | True makes the node's clock follow `/clock`. It is the store's clock kind: false is `wall` and true is `ros_sim`. It cannot change while the node runs. |
 | `objects_topic` | `/walkie_vision/objects` | The topic of `ObjectDetectionArray` observations, in memory mode. A simulated publisher uses `/walkie_vision/sim/objects`. Read-only. |
+| `reference_frames` | `[base_footprint]` | The frames a query may name in `ObjectQuery.reference_frame`, for `near` with no reference and for the distance and direction superlatives. Another frame is `INVALID`. Read-only. |
+| `robot_frame` | `base_footprint` | The frame whose pose `remember_event` records with a line. Read-only. |
+| `thing_cosine.<model>` | 0.25 | One per object vector table, such as `thing_cosine.clip_vit_b16`. With a vector, an object whose names do not match `thing` still passes when its cosine with the query is at least this. A prototype value, not tuned on real phrases. A value outside -1 to 1 stops the start. Read-only. |
 
 The node holds the store's lock, `<db_path>.lock`, for its whole life. A second node
 or an offline tool on the same file is refused. A refused start logs `Not starting:`
@@ -443,36 +453,185 @@ first.
 
 ### The object contract
 
-!!! warning "Partly served, so far"
-    These types are built and frozen. The node serves `localize_objects` and the
-    five writes that answer `NOT_READY`. Those six answer `NOT_READY` with
-    `memory_enabled` false. A type existing does not mean a feature exists. Until a
-    handler lands, a client finds no service. `search_objects`, `get_object`,
-    `find_near`, `list_rooms`, `get_room_contents`, `remember_event`, `find_events`
-    and `get_store_status` have no handler yet.
+!!! warning "Reads served, writes not yet"
+    These types are built and frozen. In memory mode, the node serves every read,
+    `remember_event`, `get_store_status` and the seeded snapshot from the stored
+    rows. Nothing merges detections yet, so the rows are the seed's anchors and
+    whatever a later core writes. The five object writes answer `NOT_READY` and keep
+    nothing. With `memory_enabled` false, every endpoint below except
+    `get_store_status` answers `NOT_READY`, and there is no snapshot.
 
-| Endpoint under `/walkie_database/` | Type                                                      | When it is served, what it does                                   |
+| Endpoint under `/walkie_database/` | Type                                                      | What it does                                                       |
 | ---------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
-| `search_objects`                   | `SearchObjects`                                           | Filters by map, room, state, layer and attributes before ranking   |
-| `get_object`                       | `GetObject`                                               | One object by id, following a merged object to its winner          |
-| `find_near`                        | `FindNear`                                                | Objects on, inside or near a reference                             |
-| `list_rooms`                       | `ListRooms`                                               | The rooms of a map                                                 |
-| `get_room_contents`                | `GetRoomContents`                                         | What memory holds in one room                                      |
-| `remember_event`, `find_events`    | `RememberEvent`, `FindEvents`                             | The task's event log                                               |
+| `search_objects`                   | `SearchObjects`                                           | Filters by map, room, state, layer, category, attributes and relation before ranking, plus catalogue priors ([Object queries](#object-queries)) |
+| `get_object`                       | `GetObject`                                               | One object by id, following a merged object to its winner, with an anchor's surfaces and, when asked, its cloud |
+| `find_near`                        | `FindNear`                                                | Objects on, inside or near a reference, or in a room               |
+| `list_rooms`                       | `ListRooms`                                               | The rooms of the map, sorted by name                               |
+| `get_room_contents`                | `GetRoomContents`                                         | What memory holds in one room, with the search's filters           |
+| `remember_event`, `find_events`    | `RememberEvent`, `FindEvents`                             | The task's event log ([Events through the node](#events-through-the-node)) |
 | `localize_objects`                 | `LocalizeObjects`                                         | Stateless centroids of supplied clouds, at their stamp, by the [rules on the object memory page](object-memory.md#what-is-built-the-checks-not-the-merging). Stores nothing |
-| `get_store_status`                 | `GetStoreStatus`                                          | A read-only probe of the map, schema and store                     |
+| `get_store_status`                 | `GetStoreStatus`                                          | A read-only probe of the mode, map, schema and store. Served in both modes |
 | `set_object_state`                 | `SetObjectState`                                          | `NOT_READY` until the fusion core lands. It keeps no row           |
 | `report_sighting`                  | `ReportSighting`                                          | `NOT_READY` until the fusion core lands. It keeps no row           |
 | `arena_reset`                      | `ArenaReset`                                              | `NOT_READY` until the fusion core lands. It never restores a file  |
 | `submit_detections`                | `SubmitDetections`                                        | `NOT_READY` until the fusion core lands. It keeps no row           |
 | `describe_object`                  | `DescribeObject`                                          | `NOT_READY` while captions are disabled. It keeps no row           |
+| `objects/snapshot` (topic)         | `std_msgs/String`                                         | The seeded objects as JSON, reliable, transient local, depth 1 ([The snapshot](#the-snapshot)) |
 
 `objects/updates` (`ObjectUpdates`, reliable, volatile, depth 100) will announce
 committed changes, and a client that sees a gap in `sequence` or a new `store_id`
-reads again. Every new response has an `OperationStatus`: its `code` is always
-set by the server, and `message` says why in at most 512 characters. An empty
-successful search is `OK` with no results, so it differs from an unavailable
-backend.
+reads again. Nothing publishes it yet. Every new response has an
+`OperationStatus`: its `code` is always set by the server, and `message` says why in
+at most 512 characters. An empty successful search is `OK` with no results, so it
+differs from an unavailable backend.
+
+| Code | When the node answers it |
+| ---- | ------------------------ |
+| `OK` | The request ran. It may have found nothing |
+| `INVALID` | The request is wrong: a limit outside 1 to 100, a word that is not in the attribute vocabulary, a relation with the wrong references, a frame not in `reference_frames`, an object id of 0 |
+| `NOT_FOUND` | An object id, a room, a reference key, a person or a session that the map does not have |
+| `WRONG_MAP` | The request names another map, or an id of an object on another map |
+| `TF_UNAVAILABLE` | A query needs the reference frame's pose, and TF has none at the node's time |
+| `UNSUPPORTED` | A vector of a model the store has no table for |
+| `NOT_READY` | Memory mode is off, a sim has sent no `/clock` sample yet, or the write is not built |
+| `CONFLICT` | A `request_id` used again with another payload or for another operation |
+| `INTERNAL` | The store failed, or holds something it should not, such as a merge cycle. The node logs it and keeps serving |
+
+### Object queries
+
+`src/walkie_database/queries.py` holds `ObjectRepository`, the only way a query
+handler reaches the store
+([ADR-0021](decisions/0021-rooms-and-object-queries.md)). It holds the node's
+connection, so all its SQL runs on the executor's thread
+([ADR-0005](decisions/0005-one-node-owns-the-database.md)).
+`src/walkie_database/results.py` turns its records into messages, and refuses a
+value that a field cannot hold before the response goes out.
+
+A search takes an `ObjectQuery`, and runs in this order:
+
+1. **Check.** Every field is checked before any row or transform is read.
+2. **Filter.** The map, the states (default `present` and `held`), the layer, the
+   room, the category, the relation and its reference, and the words. These run
+   over every row of the map, with no cut before them.
+3. **Classify the attributes.** Each requested attribute matches, is unknown, or
+   differs. An unknown value is not a mismatch. An object with a mismatch comes back
+   only when no object without one passed the filters.
+4. **Rank.** By score, then by id. A superlative ranks by its measure first.
+5. **Cut** to `max_results`, and set `truncated` when that left any out.
+
+| Part | Rule |
+| ---- | ---- |
+| `thing` | Every word must be in the object's names: its label, the detector's other labels, its catalogue aliases, its official name and its category. Words are Unicode word tokens, without case |
+| `text` | Every word must be in those names, its caption or its printed text |
+| A vector | Exact cosine with every object of the map that has a vector of that model. An object whose names miss `thing` still passes at `thing_cosine.<model>` or above, and `text` is not required of it. An object with no vector falls back to the words. `lexical_only` is true when the request sent no vector |
+| Belief | `p_now = min(0.95, p_exist × 0.5^(age / half-life))`, with half-lives of 1,800 s for a movable object and 86,400 s for an anchor. `age` is `now - last_verified` on the node's clock, and never below 0. No `last_verified` gives `p_now` 0 and `has_last_verified` false. Age never changes a state |
+| Score | `clamp(0.6 × closeness + 0.25 × p_now + 0.15 × attribute_fraction, 0, 1)`. Closeness is `(cosine + 1) / 2` with a vector, else 1 when there were words and 0 when there were none. These weights are prototype defaults, not an accuracy claim |
+| `on`, `inside` | The stored rows to the reference. `reference_key` may name an anchor, or a surface for `on`. `inside` with a surface key is `INVALID` |
+| `near` | Centres within `near_distance_m` of the reference's centre, or of the reference frame's origin when there is no reference. The reference itself is left out. A reference with no measured box is `INVALID`, and a discarded one finds nothing |
+| `in_room` | The room filter, with no reference |
+| Superlatives | `largest`/`smallest` by box volume, `thickest`/`thinnest` by the box's smallest side, `heaviest`/`lightest` by catalogue weight, `nearest`/`farthest` by distance from the reference frame, `leftmost`/`rightmost` by that frame's y axis. Objects with no such measure come last, with `measure_unknown` set |
+| Priors | Catalogue items that no current object stands for, matched by name and filters, with the room of their usual place. They are separate from matches, and have no id. A query on anchors or with a relation has none |
+
+The reference frame's pose comes from TF at the node's time, exactly, within 50 ms,
+and never the latest transform instead. Only frames in `reference_frames` are
+allowed, and a query cannot send a pose of its own.
+
+`get_object` follows `merged_into` up to 32 links. A request for a merged id
+answers the winner with `merged` true. A discarded object is `OK` with its state. A
+broken chain, a cycle or a link to another map is `INTERNAL`, because the store
+should never hold one. An anchor's surfaces come back with `geometry_valid` true
+only when the surface is measured and its anchor is a measured anchor that is not a
+tombstone. `include_cloud` adds the merged cloud, in the map frame, only for a
+measured box.
+
+An object with no measured box has `geometry_valid` false, an empty pose frame and
+zero size. An object with no catalogue weight has `has_weight` false. Neither is
+ever filled in with a guess.
+
+`tests/test_query_benchmark.py` checks every answer over 500 synthetic objects
+against a plain Python filter, and prints the timing. On a development laptop,
+outside a running node, a filtered vector search took about 26 ms at the median.
+That is not the node's latency under load, and no test asserts a time.
+
+### Events through the node
+
+`remember_event` adds one line to [the task's log](#the-tasks-log)
+([ADR-0022](decisions/0022-task-event-log.md)):
+
+- It checks the request, the kind and the text, resolves `object_id` to its current
+  object, and checks that a person belongs to the named or open session.
+- It looks up `robot_frame` in the map at the node's time, exactly, within 50 ms.
+  With no transform, the line is kept with no pose and no room. With one, the room
+  is the room the robot stands in.
+- It writes the line and its [ledger row](#retried-writes) in one transaction. A
+  retry with the same `request_id` gets the first answer, writes nothing and looks
+  up no transform.
+- A retry of a line whose session was forgotten gets its id and time back, with
+  empty text and no person or session. The line is read back only when its id, time
+  and task all match, because SQLite can give a deleted line's id again.
+
+`find_events` searches by words, `since`, and a room by name, newest first, with
+the id as tie-break. `since` with `nanosec` of a second or more is `INVALID`.
+
+### The store status
+
+`get_store_status` needs no clock and no map, so a client can call it first to
+learn the mode. `map_valid` is true in memory mode, which only starts behind the
+[map gate](#the-map-gate). It gives the map's id, hash and baseline, the
+`store_id` of this run, the clock kind, the schema version, the object vector
+models, and the arrays received and refused. `ingest_enabled` and
+`captions_enabled` are false, because nothing ingests or captions yet. A legacy
+store has no `store_meta` row, so its `store_id` is empty.
+
+### The snapshot
+
+In memory mode, the node publishes `/walkie_database/objects/snapshot` once, as
+JSON in a `std_msgs/String`, reliable, transient local and depth 1. A subscriber
+that starts later still gets it. On the wall clock it is sent at start, after a
+fresh seed's anchors are stamped. In a sim it waits for the first `/clock` sample,
+so its times are sim times. `sequence` is 0, because nothing changes the objects
+yet.
+
+```json
+{
+  "schema_version": 1,
+  "map_id": "arena-2026-11-05-1a2b3c4d",
+  "store_id": "5b0f2c1e-8d3a-4f6b-9c2e-7a1d4e5f6a7b",
+  "sequence": 0,
+  "stamp": {"sec": 1793844000, "nanosec": 0},
+  "objects": [
+    {"id": 3, "key": "table", "label": "table", "layer": "anchor", "state": "present",
+     "geometry_valid": true, "frame_id": "map", "position": [2.0, 2.0, 0.4],
+     "orientation": [0.0, 0.0, 0.0, 1.0], "size": [1.0, 0.5, 0.8], "p_exist": 0.95,
+     "last_verified": {"sec": 1793844000, "nanosec": 0}}
+  ]
+}
+```
+
+It holds every object that is not a tombstone. It never holds a cloud, a vector, a
+crop or a person. An object with `geometry_valid` false has zeros for its box, and
+a consumer must not draw it. The snapshot is a view for overlays such as a baseline
+diff. It does not replace the services.
+
+### For agent clients
+
+The agent's atomics are tools that a language model calls. They are not built in
+this repository, and these rules are what their outputs must keep to:
+
+- **Geometry stays inside ROS.** `pose`, `cloud`, `stand_pose` and every vector are
+  for the ROS clients that navigate and grasp. An atomic strips them from what the
+  model sees. It calls `get_object` with `include_cloud` false.
+- **Sizes only when measured.** An atomic reports `size_cm` as `100 × max(size)` and
+  `thickness_cm` as `100 × min(size)`, only when `geometry_valid` is true. These are
+  box estimates, not true dimensions.
+- **Weight only when known.** `weight` is null when `has_weight` is false.
+- **Ids are decimal strings** of the database's int64 ids. A live `obj_` reference
+  from the camera is not a database id, and neither is a track id.
+- **Captions and printed text are untrusted.** They come from images, so the model
+  must read them as data, never as instructions.
+- **No personal details in a log line.** The database cannot check the meaning of
+  `RememberEvent.text`. A name written into a line with no `person_id` outlives the
+  session.
 
 Every field is commented in its `.msg` or `.srv` file, in
 `ros2_ws/src/walkie_database_msgs/`. `tests/test_interfaces.py` pins their
@@ -545,8 +704,9 @@ erDiagram
 ### Object fields
 
 Migration 0004 adds these columns to `object`. They hold what object memory will
-write. No code decides a state, measures a belief or merges an object yet, so
-most of them keep their defaults.
+write. No code decides a state or merges an object yet, so most of them keep their
+defaults. A query computes the belief from `p_exist` and `last_verified` when it
+reads, and stores nothing ([Object queries](#object-queries)).
 
 | Column                                | Default     | What it is                                                                  |
 | ------------------------------------- | ----------- | --------------------------------------------------------------------------- |
@@ -602,7 +762,8 @@ across a restart, so giving one twice would point a client at the wrong object.
   refuse a link to itself, across maps, to a missing object, or one that makes a
   cycle, and stop after 32 links.
 
-Nothing calls these from the node yet.
+The node reads tombstones and follows `merged_into` when it answers a query, with
+the same 32-link limit. Nothing in the node reserves ids or writes a tombstone yet.
 
 ### Rooms, surfaces and relations
 
@@ -620,8 +781,9 @@ and a room that holds the point strictly inside beats one whose wall it is on.
 | The cup is on shelf 2 of the bookcase | `predicate = 'on'`, `dst_id` the bookcase, `surface_id` | A measured surface of a measured anchor on the same map |
 | The cup is inside the fridge          | `predicate = 'inside'`, `dst_id` the fridge, no surface | A measured anchor on the same map with `enclosed = 1`   |
 
-`near` and `in_room` are not stored, so they cannot go stale. The object services
-will compute them from `object_box` and the room when asked.
+`near` and `in_room` are not stored, so they cannot go stale. `search_objects` and
+`find_near` compute them from `object_box` and the room when asked
+([Object queries](#object-queries)).
 
 Deleting an anchor deletes its surfaces and every relation to it. Deleting a surface
 deletes the relations through it. An anchor that loses its measured box, or becomes a
@@ -632,7 +794,9 @@ tombstone, keeps its rows, but `usable_surfaces` and `relations` stop returning 
 `event` is the log of what the task did, one line at a time. `add_event` checks the
 kind (`action`, `note`, `error` or `handover`), the 512-character limit, and that a
 room or object is on the event's map. `find_events` searches by map, words, time and
-room, newest first ([ADR-0022](decisions/0022-task-event-log.md)).
+room, newest first ([ADR-0022](decisions/0022-task-event-log.md)). The node's
+`remember_event` and `find_events` call them
+([Events through the node](#events-through-the-node)).
 
 A line must not contain personal details. The database can check its length and
 structure, and it cannot read its meaning.
@@ -660,8 +824,9 @@ an image, a crop or an embedding, and the size limits refuse them. The outcome h
 ids and statuses only, because forgetting a session does not touch this table.
 
 The table lives as long as the store. A node restart or a new `store_id` keeps it.
-The [offline restore](#restore-a-stopped-store) clears it. Nothing calls these
-helpers from the node yet.
+The [offline restore](#restore-a-stopped-store) clears it. `remember_event` is the
+first write of the node that uses it. Its outcome holds only the event's id and
+time.
 
 ### The search indexes
 

@@ -38,6 +38,14 @@ answer, and must not write twice.
 - Canonical JSON has sorted keys and no spaces, and refuses NaN, bytes and anything
   that is not JSON. A string is at most 1,024 characters and an array at most 64
   items, which keeps a vector, a crop or a mask out of the ledger.
+- `RememberEvent` records the robot's pose from TF at the node's time, exactly,
+  waiting at most 50 ms, and never the latest transform instead. With no transform
+  the line is kept with no pose and no room. The lookup runs before the
+  transaction, and only for a line that is not a retry.
+- The ledger outcome of `RememberEvent` is the event's id and time. A retry reads
+  the line back by that id, and returns its text only when the line is still there
+  with the same time and task. Otherwise it returns the id and time with empty text
+  and no person or session.
 
 **Consequences**
 
@@ -56,11 +64,17 @@ answer, and must not write twice.
   another line. Treat an event id as valid only until its session is forgotten.
 - The ledger grows until a restore clears it. An outcome is at most 4 KiB, and most
   are far smaller.
+- A forgotten line's retry shows a newer line's text only if that line got the same
+  id, the same time and the same task. A sim clock that restarts within one store
+  lineage makes an equal time possible, but not likely.
+- The TF wait blocks the executor for up to 50 ms when the robot's pose is missing.
+  A pose a moment old is not used, so a line written while TF lags has no pose.
 - The event kinds and the ledger's bounds live in the helpers, so a new kind or limit
   needs no table rebuild. Raw SQL can get past them, and the node is the only writer
   ([ADR-0005](/architecture/decisions/0005-one-node-owns-the-database.md)).
 
 **See also:** [The task's log](/architecture/database.md#the-tasks-log),
 [Retried writes](/architecture/database.md#retried-writes),
+[Events through the node](/architecture/database.md#events-through-the-node),
 [ADR-0021](/architecture/decisions/0021-rooms-and-object-queries.md)
 <!-- --8<-- [end:body] -->

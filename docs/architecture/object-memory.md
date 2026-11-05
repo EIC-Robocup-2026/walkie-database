@@ -7,7 +7,9 @@
     the object id allocator and tombstones are built
     ([Object fields](database.md#object-fields)), and nothing writes them yet.
     The node does receive and check observations, and it can localize them, but
-    receiving one [creates no row](#what-is-built-the-checks-not-the-merging).
+    receiving one [creates no row](#what-is-built-the-checks-not-the-merging). The
+    object reads and the seeded snapshot serve the stored rows as they are
+    ([Object queries](database.md#object-queries)), with no merging behind them.
 
 Perception sees the same cup many times, from different angles, each time
 as a partial point cloud. Object memory merges those detections into one
@@ -96,7 +98,8 @@ parameter, best effort, volatile, depth 1. For each array it does three things:
 
 That is all. It writes no row, allocates no id, stores no vector and writes no file.
 The slot exists so that the object memory has something to start from. No request
-reads it yet, and `SubmitDetections` and the other writes answer `NOT_READY`
+reads it yet, besides the counters in `get_store_status`, and `SubmitDetections`
+and the other writes answer `NOT_READY`
 ([The object contract](database.md#the-object-contract)). With `memory_enabled`
 false, the node has no subscription and no TF listener.
 
@@ -232,6 +235,15 @@ pixi run ros2 bag play <bag folder>
 ```
 
 ## What other programs see
+
+### The services and the snapshot
+
+The object reads and `/walkie_database/objects/snapshot` are built over the stored
+rows ([The object contract](database.md#the-object-contract)). ROS clients that
+navigate or grasp read `pose`, `size` and, from `get_object`, the cloud. An agent's
+tool for a language model strips them, and reports sizes only for a measured box
+([For agent clients](database.md#for-agent-clients)). Once merging is built, the
+same services return its objects, with no change to the types.
 
 ### RViz
 
