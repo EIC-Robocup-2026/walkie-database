@@ -24,7 +24,9 @@ A previous seed does not know the IDs that a store restored from it has given ou
 since. ``--id-floor N`` gives new keys IDs above N as well, and makes the seed's
 object counter at least N. N is the store's high-water mark, which the restore
 tool names when it refuses a seed that would give one of those IDs again. The
-default, 0, changes nothing.
+default, 0, changes nothing. The floor moves only keys that the previous seed
+lacks, so the rebuild must start from the seed the store was restored from, not
+from the refused one. For that reason ``--output`` may not be the previous seed.
 
 The same inputs and the same previous seed give the same rows. So ``created_at``
 comes from the date and the seed's ``store_id`` is a constant. The restore tool and
@@ -693,13 +695,19 @@ def write_seed(
     check_baseline(baseline_rev, folder, map_id)
     target = real_path(output)
     previous = real_path(previous_seed) if previous_seed is not None else None
+    if previous is not None and (
+        previous == target or (previous.exists() and target.exists() and previous.samefile(target))
+    ):
+        raise Refused(
+            f"The output {target} is the previous seed. Write the new seed to another path and keep "
+            "this one: if a restore refuses the new seed, the rebuild with --id-floor starts from it again."
+        )
     # Read before any lock, because a lock file is a write.
     _check_output(target, map_id, previous, replace)
     if previous is not None:
         read_lineage(previous, map_id, folder.digest)
 
-    same_file = previous == target
-    with (nullcontext() if previous is None or same_file else StoreLock(previous)), StoreLock(target):
+    with (nullcontext() if previous is None else StoreLock(previous)), StoreLock(target):
         lineage = Lineage({name: 0 for name in COUNTERS}, {})
         if previous is not None:
             checkpoint_closed_store(previous)

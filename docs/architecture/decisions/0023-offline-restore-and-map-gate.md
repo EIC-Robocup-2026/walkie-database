@@ -68,7 +68,10 @@ We considered:
   store's object high-water
   mark, unless the store holds that ID with the same key. The message names the ID,
   its key and the mark, and the two ways out: rebuild the seed with `--id-floor` set to
-  the mark, or restore to a new path, which starts a new lineage. Rows are never
+  the mark, from the seed the store was restored from, or restore to a new path, which
+  starts a new lineage. The floor moves only keys that the previous seed lacks, so a
+  seed rebuilt from the refused one keeps the clashing ID. That is why `seed_store`
+  refuses an `--output` that is its `--previous-seed`. Rows are never
   renumbered at restore time, so every worker that restores one seed gets the same
   anchor IDs. A seed holds no people or sessions, and room, surface and catalogue IDs
   have no counter, so only object IDs are checked.
@@ -104,8 +107,10 @@ We considered:
   anchors under the same ID and key. Nothing in the node removes or renames an anchor
   today. A revised seed that adds an anchor is
   refused on a store that has given out IDs since the earlier seed, until it is
-  rebuilt with `--id-floor`. Its new anchors then get IDs above every ID that store
-  has given out, so the IDs differ from those of a seed built without the floor.
+  rebuilt with `--id-floor` from that earlier seed. Its new anchors then get IDs above
+  every ID that store has given out, so the IDs differ from those of a seed built
+  without the floor. The earlier seed must be kept for that rebuild, so a reseed
+  writes to a new path.
 - A seed for a map whose baseline has since been chosen must be rebuilt, because the
   store's baseline must then equal the manifest's.
 - `flock` is reliable on a local disk only. Do not put a store on NFS.

@@ -21,8 +21,10 @@ The larger counter protects only the IDs given after the restore. The seed's own
 object IDs are copied as they are, and a seed built from an earlier seed does not
 know which IDs a store has given out since. So an object ID in the seed at or below
 the outgoing store's high-water mark must be the same keyed object there, or the
-restore is refused. Rebuilding the seed with ``--id-floor`` set to that mark, or
-restoring to a new path, which starts a new lineage, are the ways out. A seed holds
+restore is refused. Rebuilding the seed with ``--id-floor`` set to that mark, from
+the seed the store was restored from, or restoring to a new path, which starts a
+new lineage, are the ways out. The floor moves only keys that the previous seed
+lacks, so a seed rebuilt from the refused one keeps the clashing ID. A seed holds
 no people or sessions, so their IDs cannot clash. Room, surface and catalogue IDs
 have no counter and follow the seed.
 
@@ -110,8 +112,9 @@ def _check_lineage(
         raise Refused(
             f"The seed {seed} gives the ID {object_id} to {key!r}, but {there}. The store {db} "
             f"has given out object IDs up to {highwater}. Rebuild the seed with --id-floor "
-            f"{highwater}, so that its new anchors get IDs above that, or restore to a new path, "
-            "which starts a new lineage."
+            f"{highwater} and, as --previous-seed, the seed this store was restored from, not this "
+            "one, so that its new anchors get IDs above that. Or restore to a new path, which starts "
+            "a new lineage."
         )
 
 

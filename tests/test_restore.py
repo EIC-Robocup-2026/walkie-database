@@ -352,6 +352,32 @@ def test_a_seed_rebuilt_above_the_stores_high_water_mark_restores(seed, db, fold
     assert restored.counters["object"] == counters(db)["object"] == 5
 
 
+def test_the_floor_rebuild_works_only_from_the_seed_the_store_was_restored_from(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    cup = issue_object_ids(db, folder, count=2)
+    revised = with_new_shelf(tmp_path, folder, seed)
+    with pytest.raises(Refused, match="--id-floor 4"):
+        restore(revised, db, folder, "wall")
+
+    # The refused seed already gives new_shelf the cup's ID, and the floor moves only
+    # the keys a previous seed lacks, so a rebuild from it keeps the clash.
+    from_refused = build_seed(tmp_path, folder, "from_refused.db", [anchor(), bare_anchor(), anchor("new_shelf")],
+                              extra=("--previous-seed", str(revised), "--id-floor", "4"))  # fmt: skip
+    assert object_keys(from_refused)["new_shelf"] == cup
+    before = db.read_bytes()
+    with pytest.raises(Refused, match=f"ID {cup} to 'new_shelf'"):
+        restore(from_refused, db, folder, "wall")
+    assert db.read_bytes() == before
+
+    # The documented way out: rebuild from the original seed, over the refused one.
+    rebuilt = with_new_shelf(tmp_path, folder, seed, extra=("--id-floor", "4", "--replace"))
+    assert rebuilt == revised
+
+    restore(rebuilt, db, folder, "wall")
+
+    assert object_keys(db) == {"table": 1, "wardrobe": 2, "new_shelf": 5}
+
+
 def test_a_revised_seed_restores_to_a_new_path_as_a_new_lineage(seed, db, folder, tmp_path):
     restore(seed, db, folder, "wall")
     issue_object_ids(db, folder)

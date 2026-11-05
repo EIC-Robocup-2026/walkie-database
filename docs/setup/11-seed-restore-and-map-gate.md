@@ -57,22 +57,28 @@ pixi run db-seed-store --map-folder /tmp/arena/map --arena arena --date 2026-11-
 `use_sim_time`. A bad input prints `Refused, and wrote nothing:` with the reason, and
 exits with code 1.
 
-To change a seed later, build it again and name the old one, so that repeated anchors
-keep their IDs:
+To change a seed later, build a new one at another path and name the old one, so that
+repeated anchors keep their IDs. `--output` may not be the `--previous-seed`. Keep the
+old seed until the new one has restored, because Step 3 may send you back to it:
 
 ```bash
-pixi run db-seed-store ... --previous-seed /tmp/arena/seed.db --output /tmp/arena/seed.db --replace
+pixi run db-seed-store ... --previous-seed /tmp/arena/seed.db --output /tmp/arena/seed-2.db
 ```
 
 A store restored from the old seed may have given out IDs of its own since, for
-example to movable objects. If the new seed adds an anchor, add `--id-floor` with the
-store's high-water mark, so the new anchor's ID is above every one of them. Step 3's
-refusal names that number:
+example to movable objects. If the new seed adds an anchor, Step 3 can refuse it and
+name the store's high-water mark. Build the new seed again from the same old seed,
+with `--id-floor` set to that number, so the new anchor's ID is above every one of
+them:
 
 ```bash
 pixi run db-seed-store ... --previous-seed /tmp/arena/seed.db --id-floor 42 \
-    --output /tmp/arena/seed.db --replace
+    --output /tmp/arena/seed-2.db --replace
 ```
+
+The floor moves only the keys that the previous seed lacks. A seed built from the
+refused `seed-2.db` keeps the clashing ID, and Step 3 refuses it again. Without the old
+seed, restore to a new path instead.
 
 A sim world uses `pixi run db-seed-sim` instead. It takes `--world-source`,
 `--locations` and `--room-names` in place of `--rooms`
@@ -94,11 +100,12 @@ It also refuses a seed that would give an ID the store has already given out to
 another object, and names the store's high-water mark:
 
 ```text
-Refused, and changed nothing: The seed /tmp/arena/seed.db gives the ID 3 to 'new_shelf', but the store's ID 3 is 'observed cup'. The store /tmp/arena/walkie.db has given out object IDs up to 42. Rebuild the seed with --id-floor 42, so that its new anchors get IDs above that, or restore to a new path, which starts a new lineage.
+Refused, and changed nothing: The seed /tmp/arena/seed-2.db gives the ID 3 to 'new_shelf', but the store's ID 3 is 'observed cup'. The store /tmp/arena/walkie.db has given out object IDs up to 42. Rebuild the seed with --id-floor 42 and, as --previous-seed, the seed this store was restored from, not this one, so that its new anchors get IDs above that. Or restore to a new path, which starts a new lineage.
 ```
 
-Rebuild the seed with that `--id-floor` (Step 2), or restore to a new path. A new path
-starts its IDs again from the seed's counters.
+Rebuild the seed with that `--id-floor` from the seed the store was restored from
+(Step 2), or restore to a new path. A new path starts its IDs again from the seed's
+counters.
 
 ## Step 4: Run the node in memory mode
 
@@ -130,9 +137,9 @@ world repository.
 | File | What it checks |
 | ---- | -------------- |
 | `tests/test_store_lock.py` | A second holder is refused, a killed holder's lock is released, and the WAL is checkpointed before an install |
-| `tests/test_seed_store.py` | A bad input writes nothing, the same inputs give the same rows, a reseed keeps anchor IDs, `--id-floor` puts new anchors above it, and no fake vector enters |
+| `tests/test_seed_store.py` | A bad input writes nothing, the same inputs give the same rows, a reseed keeps anchor IDs and may not overwrite its previous seed, `--id-floor` puts new anchors above it, and no fake vector enters |
 | `tests/test_seed_sim.py` | The adapter takes outlines from the world and poses from the locations, passes `--id-floor` on, and refuses a blank-map locations file |
-| `tests/test_restore.py` | A fresh `store_id`, the larger counters, a killed node's WAL recovered first, a seed that would give an issued ID to another object refused, and a crash leaving a usable store |
+| `tests/test_restore.py` | A fresh `store_id`, the larger counters, a killed node's WAL recovered first, a seed that would give an issued ID to another object refused, the floor rebuild working only from the original seed, and a crash leaving a usable store |
 | `tests/test_map_gate.py` | A wrong map, digest, baseline or clock stops the start, the default mode is unchanged, and people's times follow a fake `/clock` |
 
 !!! note "What has not run"

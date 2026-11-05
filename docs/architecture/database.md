@@ -1184,10 +1184,13 @@ The map ID is computed as `<arena>-<date>-<first 8 of the digest>`, never given.
   is at least N. N is the store's high-water mark, which the restore tool names when
   it refuses the seed ([Restore a stopped store](#restore-a-stopped-store)). The
   default, 0, changes nothing, and the person, session and event counters are not
-  touched.
+  touched. The floor moves only keys that the previous seed lacks, so the rebuild
+  must start from the seed the store was restored from. A seed rebuilt from the
+  refused one keeps the clashing ID.
 - **`--replace` replaces only a seed.** A file with no `store_meta` row, or one with
   people or live objects in it, is refused. A seed of the same map also needs
-  `--previous-seed`, so that its IDs are not lost.
+  `--previous-seed`, so that its IDs are not lost. `--output` may not be the
+  `--previous-seed`, so the old seed stays for a rebuild with a floor.
 - **No fallback.** Nothing turns a stand pose or a flat polygon into a box, and no
   tool makes up a coordinate or a vector.
 
@@ -1312,7 +1315,8 @@ store is the seed's rows with new run metadata. It is not a copy of the seed's b
   they are. So each object ID in the seed at or below the outgoing store's object
   high-water mark must be the same keyed object there: the same ID with the same key.
   Otherwise the restore is refused, and the message names the ID, its key and the
-  mark. Rebuild the seed with `--id-floor` set to that mark, or restore to a new
+  mark. Rebuild the seed with `--id-floor` set to that mark, from the seed the store
+  was restored from, or restore to a new
   path, which starts a new lineage. A seed ID above the mark is new, and an anchor
   that the seed leaves out was removed, so neither is refused.
 - It has `refresh_anchors_pending` set, so the node stamps the anchors once.

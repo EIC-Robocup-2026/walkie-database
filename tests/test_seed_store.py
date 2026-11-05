@@ -608,6 +608,41 @@ def test_a_previous_seed_is_not_changed_by_a_reseed(tmp_path, folder, map_id, ou
     assert output.read_bytes() == before
 
 
+def another_name_of(seed, how):
+    """A path that reaches *seed*: itself, a symlink to it, or a hard link to it."""
+    if how == "the same path":
+        return seed
+    name = seed.parent / f"{how.replace(' ', '_')}.db"
+    if how == "a symlink":
+        name.symlink_to(seed)
+    else:
+        name.hardlink_to(seed)
+    return name
+
+
+# A floor rebuild must start from the seed a store was restored from, so a reseed may
+# not overwrite it, under any name of that file.
+@pytest.mark.parametrize("how", ["the same path", "a symlink", "a hard link"])
+def test_a_reseed_onto_its_own_previous_seed_is_refused(tmp_path, folder, map_id, output, how, capsys):
+    build(tmp_path, folder, output)
+    capsys.readouterr()
+    again = another_name_of(output, how)
+    before, listing = output.read_bytes(), sorted(p.name for p in output.parent.iterdir())
+    argv = seed_argv(
+        tmp_path, folder, again,
+        anchors=anchors_document(map_id, anchors=[anchor(), anchor("new_shelf")]),
+        extra=("--previous-seed", str(output), "--id-floor", "7", "--replace"),
+    )  # fmt: skip
+
+    assert main(argv) == 1
+
+    err = capsys.readouterr().err
+    assert "Refused, and wrote nothing" in err
+    assert "is the previous seed" in err
+    assert output.read_bytes() == before
+    assert sorted(p.name for p in output.parent.iterdir()) == listing
+
+
 # An ID floor --------------------------------------------------------------------------
 
 
@@ -715,19 +750,21 @@ def test_replacing_a_seed_of_the_same_map_needs_a_previous_seed(tmp_path, folder
     assert output.read_bytes() == before
 
 
-def test_a_seed_can_replace_itself_keeping_its_ids(tmp_path, folder, map_id, output):
+def test_a_reseed_can_replace_an_earlier_reseed_keeping_its_ids(tmp_path, folder, map_id, output):
     build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=[anchor()]))
     first = object_ids(output)
+    second = reseed(tmp_path, folder, map_id, output, [anchor()])
 
     build(
-        tmp_path, folder, output,
+        tmp_path, folder, second,
         anchors=anchors_document(map_id, anchors=[anchor(), anchor("desk", surfaces=[])]),
         extra=("--previous-seed", str(output), "--replace"),
     )  # fmt: skip
 
-    assert object_ids(output)["table"] == first["table"]
-    assert object_ids(output)["desk"] > first["table"]
-    assert sorted(p.name for p in output.parent.iterdir()) == ["seed.db", "seed.db.lock"]
+    assert object_ids(second)["table"] == first["table"]
+    assert object_ids(second)["desk"] > first["table"]
+    assert object_ids(output) == first
+    assert sorted(p.name for p in second.parent.iterdir()) == ["second.db", "second.db.lock", "seed.db", "seed.db.lock"]
 
 
 def test_a_seed_of_another_map_can_be_replaced(tmp_path, folder, output):
@@ -800,20 +837,21 @@ def test_a_held_lock_refuses_the_tool_and_leaves_no_output(tmp_path, folder, out
     assert lock_path(output).exists()
 
 
-def test_a_failed_write_leaves_no_temporary_file(tmp_path, folder, output, monkeypatch, capsys):
+def test_a_failed_write_leaves_no_temporary_file(tmp_path, folder, map_id, output, monkeypatch, capsys):
     build(tmp_path, folder, output)
-    before = output.read_bytes()
+    second = reseed(tmp_path, folder, map_id, output, [anchor()])
+    before = second.read_bytes()
 
     def fail(*args):
         raise OSError("disk full")
 
     monkeypatch.setattr(os, "replace", fail)
-    argv = seed_argv(tmp_path, folder, output, extra=("--replace", "--previous-seed", str(output)))
+    argv = seed_argv(tmp_path, folder, second, extra=("--replace", "--previous-seed", str(output)))
     assert main(argv) == 1
 
     assert "disk full" in capsys.readouterr().err
-    assert output.read_bytes() == before
-    assert sorted(p.name for p in output.parent.iterdir()) == ["seed.db", "seed.db.lock"]
+    assert second.read_bytes() == before
+    assert sorted(p.name for p in second.parent.iterdir()) == ["second.db", "second.db.lock", "seed.db", "seed.db.lock"]
 
 
 # Fingerprints -----------------------------------------------------------------------
@@ -867,16 +905,18 @@ def test_a_seed_from_an_older_schema_can_be_replaced_and_read_for_its_ids(tmp_pa
     """A seed from before migration 6 lacks some of the run tables and room keys."""
     build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=[anchor()]))
     first = object_ids(output)
-    conn = connect(output)
-    conn.execute("DROP TABLE write_request")
-    conn.execute("PRAGMA user_version = 5")
-    conn.close()
+    second = reseed(tmp_path, folder, map_id, output, [anchor()])
+    for old in (output, second):
+        conn = connect(old)
+        conn.execute("DROP TABLE write_request")
+        conn.execute("PRAGMA user_version = 5")
+        conn.close()
 
-    build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=[anchor()]),
+    build(tmp_path, folder, second, anchors=anchors_document(map_id, anchors=[anchor()]),
           extra=("--replace", "--previous-seed", str(output)))  # fmt: skip
 
-    assert object_ids(output) == first
-    conn = read(output)
+    assert object_ids(second) == first
+    conn = read(second)
     assert schema_version(conn) == load_migrations()[-1].version
     conn.close()
 
