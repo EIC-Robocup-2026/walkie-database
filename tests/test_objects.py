@@ -3,6 +3,8 @@
 import json
 import math
 import sqlite3
+from contextlib import closing
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -98,12 +100,16 @@ def test_reservation_runs_its_statements_in_order(store):
     store.set_trace_callback(statements.append)
     reserve_object_ids(store, 2)
     store.set_trace_callback(None)
-    kinds = [statement.split("SET")[0].strip() for statement in statements]
+    # The text before SET or an opening bracket, so that a bound token does not show.
+    kinds = [statement.split("SET")[0].split("(")[0].strip() for statement in statements]
     assert kinds == [
         "PRAGMA synchronous",
         "PRAGMA synchronous = FULL",
         "BEGIN IMMEDIATE",
         "UPDATE last_id",
+        # The connection records the reservation inside the same transaction.
+        "CREATE TEMP TABLE IF NOT EXISTS object_id_reservation",
+        "INSERT INTO temp.object_id_reservation",
         "COMMIT",
         "PRAGMA synchronous = 1",
     ]
@@ -237,6 +243,60 @@ def test_an_id_of_the_reservation_cannot_come_back_after_a_delete(store):
     with transaction(store):
         with pytest.raises(Refused, match="never given twice"):
             insert_object(store, new_cup(), reservation.first, reservation=reservation)
+
+
+def test_a_reservation_cannot_be_used_after_its_connection_closes(tmp_path, store):
+    # The ids the closed connection used went with it, so only the reservation's
+    # own identity can stop a deleted id from coming back here.
+    reservation = reserve_object_ids(store)
+    with transaction(store):
+        insert_object(store, new_cup(label="first"), reservation.first, reservation=reservation)
+    with transaction(store):
+        store.execute("DELETE FROM object WHERE id = ?", (reservation.first,))
+    store.close()
+
+    with closing(connect(tmp_path / "walkie.db")) as reopened:
+        with transaction(reopened):
+            with pytest.raises(Refused, match="another or a closed connection"):
+                insert_object(reopened, new_cup(label="second"), reservation.first, reservation=reservation)
+        assert reopened.execute("SELECT count(*) FROM object").fetchone()[0] == 0
+        assert reserve_object_ids(reopened).first == reservation.last + 1
+
+
+def test_a_reservation_cannot_be_used_on_another_open_connection(tmp_path, store):
+    reservation = reserve_object_ids(store, 2)
+    with closing(connect(tmp_path / "walkie.db")) as other:
+        with transaction(other):
+            with pytest.raises(Refused, match="another or a closed connection"):
+                insert_object(other, new_cup(), reservation.first, reservation=reservation)
+            # Refused before the id is looked at, also for an id the caller retains.
+            with pytest.raises(Refused, match="another or a closed connection"):
+                insert_object(other, new_cup(layer="anchor", key="table"), 7, reservation=reservation,
+                              retained_ids={7})
+        assert other.execute("SELECT count(*) FROM object").fetchone()[0] == 0
+
+    # The issuing connection still owns every id of it.
+    with transaction(store):
+        for object_id in reservation:
+            insert_object(store, new_cup(), object_id, reservation=reservation)
+    assert [row[0] for row in store.execute("SELECT id FROM object ORDER BY id")] == list(reservation)
+
+
+def test_a_reservation_rebuilt_from_its_range_or_widened_is_refused(store):
+    reservation = reserve_object_ids(store, 2)
+    rebuilt = IdReservation(reservation.first, reservation.last)
+    widened = replace(reservation, last=reservation.last + 1)
+    with transaction(store):
+        with pytest.raises(Refused, match="not issued on this connection"):
+            insert_object(store, new_cup(), reservation.first, reservation=rebuilt)
+        with pytest.raises(Refused, match="not issued on this connection"):
+            insert_object(store, new_cup(), widened.last, reservation=widened)
+    assert store.execute("SELECT count(*) FROM object").fetchone()[0] == 0
+
+    # Neither attempt used an id of the real reservation.
+    with transaction(store):
+        insert_object(store, new_cup(), reservation.first, reservation=reservation)
+    assert store.execute("SELECT count(*) FROM object").fetchone()[0] == 1
 
 
 def test_a_rolled_back_insert_can_retry_its_id(store):

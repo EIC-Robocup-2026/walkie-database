@@ -755,8 +755,20 @@ across a restart, so giving one twice would point a client at the wrong object.
   cut, and a lost reservation would give an id twice. The disk's own promise to
   keep a synced write is still a limit no test here can check.
 - A crash can leave reserved ids unused. Those gaps are harmless.
+- A reservation belongs to the connection that made it, and lasts until that
+  connection closes. In the same transaction as the counter, the connection
+  records the block and a random token in a `TEMP` table, and the returned
+  `IdReservation` carries the token. A `TEMP` table is private to its
+  connection and goes away with it. A restarted node reserves a new block.
+- `insert_object` refuses a reservation that its connection did not issue,
+  before it looks at the id. That covers a reservation from another
+  connection, from a closed one, and one built by hand or with a changed range.
+  The ids a connection has used are only in its own `TEMP` table, so a
+  reservation used again on a reopened file could otherwise give a deleted id
+  twice.
 - `insert_object` refuses an id outside the reservation, and an id that the
-  reservation has already used, even after a delete. It accepts `retained_ids`,
+  reservation has already used, even after a delete. An insert that rolls back
+  frees its id for a retry. It accepts `retained_ids`,
   for the anchors a seed keeps across runs. A test fixture that needs fixed ids
   writes SQL into a fresh store instead. It writes a row into `object_box` only
   for a measured box.
