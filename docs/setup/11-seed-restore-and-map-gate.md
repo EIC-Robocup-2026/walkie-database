@@ -59,15 +59,16 @@ exits with code 1.
 
 To change a seed later, build a new one at another path and name the old one, so that
 repeated anchors keep their IDs. `--output` may not be the `--previous-seed`. Keep the
-old seed until the new one has restored, because Step 3 may send you back to it:
+old seed until the new one has restored, because
+[Step 3](#restore-the-new-seed) may send you back to it:
 
 ```bash
 pixi run db-seed-store ... --previous-seed /tmp/arena/seed.db --output /tmp/arena/seed-2.db
 ```
 
 A store restored from the old seed may have given out IDs of its own since, for
-example to movable objects. If the new seed adds an anchor, Step 3 can refuse it and
-name the store's high-water mark. Build the new seed again from the same old seed,
+example to movable objects. If the new seed adds an anchor,
+[Step 3](#restore-the-new-seed) can refuse it and name the store's high-water mark. Build the new seed again from the same old seed,
 with `--id-floor` set to that number, so the new anchor's ID is above every one of
 them:
 
@@ -96,7 +97,19 @@ pixi run db-restore --seed /tmp/arena/seed.db --db /tmp/arena/walkie.db \
 The target may be a new path. An existing store must be of the same map, and its ID
 counters carry over. The tool refuses while a node holds the store's lock.
 
-It also refuses a seed that would give an ID the store has already given out to
+### Restore the new seed {#restore-the-new-seed}
+
+After a reseed or a floor rebuild in Step 2, restore the new seed, not the old one:
+
+```bash
+pixi run db-restore --seed /tmp/arena/seed-2.db --db /tmp/arena/walkie.db \
+    --map-folder /tmp/arena/map --clock-kind wall --replace
+```
+
+Restoring `seed.db` again would succeed, but it would put back the old anchors and
+never check the new seed's IDs against the store.
+
+The restore refuses a seed that would give an ID the store has already given out to
 another object, and names the store's high-water mark:
 
 ```text
@@ -104,8 +117,8 @@ Refused, and changed nothing: The seed /tmp/arena/seed-2.db gives the ID 3 to 'n
 ```
 
 Rebuild the seed with that `--id-floor` from the seed the store was restored from
-(Step 2), or restore to a new path. A new path starts its IDs again from the seed's
-counters.
+(Step 2), then run the restore of `seed-2.db` above again. Or restore to a new path. A
+new path starts its IDs again from the seed's counters.
 
 ## Step 4: Run the node in memory mode
 
