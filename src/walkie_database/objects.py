@@ -7,7 +7,9 @@ reads a detection.
 
 An object id is durable. It is reserved in a committed transaction before
 anyone sees it, and it is never given again, also after a delete, a restart or
-a crash. A crash can leave gaps. That is the cost, and it is harmless.
+a crash. A crash can leave gaps. That is the cost, and it is harmless. A
+reservation belongs to the connection that made it, and no other connection
+can use it.
 
 A vector names its model, and the model is looked up in the schema, as for
 people (ADR-0007). An object's vector carries the map, room, state and layer of
@@ -17,9 +19,10 @@ its row, so that a search filters on them before it ranks.
 from __future__ import annotations
 
 import math
+import secrets
 import sqlite3
 from collections.abc import Collection, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from walkie_database.db import transaction
@@ -43,11 +46,15 @@ class IdReservation:
     """A block of object ids, already committed, from *first* to *last*.
 
     Ids the caller does not use stay unused. A reservation lasts as long as
-    the connection that made it.
+    the connection that made it, and only that connection can use it.
+    *token* is how the connection knows its own reservations, so one built
+    by hand, or copied with another range, is refused. Equality compares the
+    range only.
     """
 
     first: int
     last: int
+    token: str = field(default="", compare=False, repr=False)
 
     def __contains__(self, object_id: object) -> bool:
         return isinstance(object_id, int) and self.first <= object_id <= self.last
@@ -59,11 +66,25 @@ class IdReservation:
         return self.last - self.first + 1
 
 
+def _create_issued_table(conn: sqlite3.Connection) -> None:
+    """Make sure this connection has its record of the reservations it issued.
+
+    A TEMP table is private to its connection and goes away when the
+    connection closes, so another connection, or a later one on the same
+    file, finds no reservation in it.
+    """
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS object_id_reservation "
+        "(token TEXT PRIMARY KEY, low_id INTEGER NOT NULL, high_id INTEGER NOT NULL)"
+    )
+
+
 def reserve_object_ids(conn: sqlite3.Connection, count: int = 1) -> IdReservation:
     """Commit a new block of *count* ids, and only then return it.
 
     Call this outside any transaction, so that the ids are durable whatever
-    the caller's work does next. Raises Refused inside one.
+    the caller's work does next. Raises Refused inside one. Only *conn* can
+    use the block, and only while it stays open.
 
     In WAL mode, synchronous=NORMAL may lose the last commits on a power cut.
     A lost reservation would give an id twice, so this commit syncs to disk.
@@ -74,6 +95,7 @@ def reserve_object_ids(conn: sqlite3.Connection, count: int = 1) -> IdReservatio
         raise Refused("Object ids are reserved outside a transaction, and one is open.")
     if count < 1:
         raise Refused(f"Cannot reserve {count} object ids.")
+    token = secrets.token_hex(16)
     previous = conn.execute("PRAGMA synchronous").fetchone()[0]
     conn.execute("PRAGMA synchronous = FULL")
     try:
@@ -82,6 +104,13 @@ def reserve_object_ids(conn: sqlite3.Connection, count: int = 1) -> IdReservatio
                 "UPDATE last_id SET id = id + ? WHERE table_name = 'object' RETURNING id",
                 (count,),
             ).fetchone()[0]
+            # Recorded in the same transaction, so that the connection knows a
+            # reservation exactly when its ids are committed.
+            _create_issued_table(conn)
+            conn.execute(
+                "INSERT INTO temp.object_id_reservation (token, low_id, high_id) VALUES (?, ?, ?)",
+                (token, last - count + 1, last),
+            )
     except BaseException:
         # transaction() does not roll back a COMMIT that failed.
         if conn.in_transaction:
@@ -89,7 +118,7 @@ def reserve_object_ids(conn: sqlite3.Connection, count: int = 1) -> IdReservatio
         raise
     finally:
         conn.execute(f"PRAGMA synchronous = {int(previous)}")
-    return IdReservation(last - count + 1, last)
+    return IdReservation(last - count + 1, last, token)
 
 
 def object_id_highwater(conn: sqlite3.Connection) -> int:
@@ -153,13 +182,38 @@ def _check_box(box: ObjectBox) -> None:
         raise Refused("The object's box rotation is not a unit quaternion.")
 
 
+def _require_issued_here(conn: sqlite3.Connection, reservation: IdReservation) -> None:
+    """Refuse a reservation that *conn* did not issue, or one with another range.
+
+    The ids a connection has used are only in its own TEMP table, so a
+    reservation used on any other connection could give a deleted id again.
+    """
+    _create_issued_table(conn)
+    issued = conn.execute(
+        "SELECT 1 FROM temp.object_id_reservation WHERE token = ? AND low_id = ? AND high_id = ?",
+        (reservation.token, reservation.first, reservation.last),
+    ).fetchone()
+    if issued is None:
+        raise Refused(
+            f"The reservation of object ids {reservation.first} to {reservation.last} was not "
+            "issued on this connection. It belongs to another or a closed connection, or did "
+            "not come from reserve_object_ids. Reserve new ids on this connection."
+        )
+
+
 def _claim_new_id(
     conn: sqlite3.Connection,
     object_id: int,
     reservation: IdReservation | None,
     retained_ids: Collection[int],
 ) -> None:
-    """Refuse an id that this reservation does not own, or has already used."""
+    """Refuse an id that this reservation does not own, or has already used.
+
+    A reservation from anywhere but this connection is refused first, before
+    any id is looked at or recorded.
+    """
+    if reservation is not None:
+        _require_issued_here(conn, reservation)
     if object_id in retained_ids:
         return
     if reservation is None or object_id not in reservation:
@@ -169,7 +223,8 @@ def _claim_new_id(
         )
     # Remembered in a temporary table because it rolls back with the caller's
     # transaction, so a failed write can retry the id. It also lasts exactly
-    # as long as the connection, and so as long as the reservation.
+    # as long as the connection, and so as long as the reservation, which no
+    # other connection can use.
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS object_id_used (id INTEGER PRIMARY KEY)")
     try:
         conn.execute("INSERT INTO temp.object_id_used (id) VALUES (?)", (object_id,))
@@ -189,8 +244,10 @@ def insert_object(
 
     Runs inside the caller's transaction, so that the object and whatever
     belongs with it commit together. *object_id* must come from *reservation*,
-    or be one of *retained_ids*, the anchors a seed keeps across runs. A test
-    fixture that needs fixed ids writes SQL into a fresh store instead.
+    or be one of *retained_ids*, the anchors a seed keeps across runs. A
+    *reservation* must come from reserve_object_ids on this same connection,
+    or the insert is refused, whatever the id. A test fixture that needs fixed
+    ids writes SQL into a fresh store instead.
     """
     require_transaction(conn, "insert_object")
     if new.box is not None:

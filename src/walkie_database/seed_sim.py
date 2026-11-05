@@ -7,7 +7,7 @@ that document, and passes it to the same checks and builder as
     python -m walkie_database.seed_sim --map-folder PATH --arena NAME \\
         --date YYYY-MM-DD --clock-kind wall|ros_sim --output PATH \\
         --world-source PATH --locations PATH --room-names PATH \\
-        [--anchors PATH] [--catalogue PATH] [--previous-seed PATH] [--replace]
+        [--anchors PATH] [--catalogue PATH] [--previous-seed PATH] [--id-floor N] [--replace]
 
 Each input gives one thing:
 
@@ -139,7 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             folder=folder, map_id=map_id, arena=args.arena, date=args.date,
             clock_kind=args.clock_kind, rooms_document=rooms, anchors_document=anchors,
             catalogue_document=catalogue, output=args.output,
-            previous_seed=args.previous_seed, replace=args.replace,
+            previous_seed=args.previous_seed, replace=args.replace, id_floor=args.id_floor,
         )
     except REFUSALS as error:
         print(f"Refused, and wrote nothing: {error}", file=sys.stderr)

@@ -118,6 +118,8 @@ cmd = "python -m walkie_database.node --ros-args -p memory_enabled:=true"
 description = "Run the database node on a seeded store, gated on its map (append db_path, map_folder and map_id)"
 
 # These three write only the paths they are given, and take no defaults.
+# A reseed takes --previous-seed, and --id-floor N when a store restored from the
+# old seed has given out IDs up to N since. db-restore names N when it refuses.
 [tasks.db-seed-store]
 cmd = "python -m walkie_database.seed_store"
 description = "Build a store's seed from reviewed room, anchor and catalogue files"

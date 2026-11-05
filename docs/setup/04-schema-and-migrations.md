@@ -253,7 +253,9 @@ upgrades it. It checks the backfill, every old row and both old counters. It als
 runs the migration twice, and runs a copy that fails at its last statement, which
 must leave version 3 unchanged. `tests/test_objects.py` checks the order of the
 reservation's `PRAGMA` and `COMMIT`, and that an id is not given again after a
-delete, a restart or an unused reservation.
+delete, a restart or an unused reservation. It also checks that a reservation
+works only on the connection that made it: not on another open connection, not
+after its connection closes, and not when it is built by hand or widened.
 
 ## Migration 0005: object vector filters
 

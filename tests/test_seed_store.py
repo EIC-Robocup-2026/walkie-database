@@ -32,6 +32,7 @@ from walkie_map_id import make_map_id
 
 import walkie_database
 from walkie_database.db import connect, transaction
+from walkie_database.map_config import read_map_folder
 from walkie_database.migrate import load_migrations, migrate, schema_version
 from walkie_database.object_context import (
     find_catalogue_items,
@@ -40,7 +41,8 @@ from walkie_database.object_context import (
     usable_surfaces,
 )
 from walkie_database.objects import NewObject, insert_object, reserve_object_ids
-from walkie_database.seed_store import RUN_TABLES, SEED_STORE_ID, main
+from walkie_database.people import Refused
+from walkie_database.seed_store import RUN_TABLES, SEED_STORE_ID, main, write_seed
 from walkie_database.store_lock import StoreLock, lock_path
 
 CLIP = "clip_vit_b16"
@@ -592,6 +594,90 @@ def test_a_previous_seed_is_not_changed_by_a_reseed(tmp_path, folder, map_id, ou
     before = output.read_bytes()
     reseed(tmp_path, folder, map_id, output, [anchor()])
     assert output.read_bytes() == before
+
+
+# An ID floor --------------------------------------------------------------------------
+
+
+def test_an_id_floor_gives_new_anchors_ids_above_it(tmp_path, folder, map_id, output):
+    build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=[anchor()]))
+    second = tmp_path / "out" / "second.db"
+    build(tmp_path, folder, second, anchors=anchors_document(map_id, anchors=[anchor(), anchor("desk", surfaces=[])]),
+          extra=("--previous-seed", str(output), "--id-floor", "10"))  # fmt: skip
+
+    assert object_ids(second) == {"table": object_ids(output)["table"], "desk": 11}
+    assert counters(second)["object"] == 11
+
+
+def test_an_id_floor_raises_the_object_counter_with_no_new_anchor(tmp_path, folder, map_id, output):
+    build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=[anchor()]))
+    second = tmp_path / "out" / "second.db"
+    build(tmp_path, folder, second, anchors=anchors_document(map_id, anchors=[anchor()]),
+          extra=("--previous-seed", str(output), "--id-floor", "10"))  # fmt: skip
+
+    assert object_ids(second) == object_ids(output)
+    assert counters(second)["object"] == 10
+
+
+def test_an_id_floor_applies_to_a_first_seed(tmp_path, folder, output):
+    build(tmp_path, folder, output, extra=("--id-floor", "5"))
+
+    assert object_ids(output) == {"table": 6, "wardrobe": 7}
+    assert counters(output)["object"] == 7
+
+
+def test_an_id_floor_at_or_below_the_previous_counter_changes_nothing(tmp_path, folder, map_id, output):
+    build(tmp_path, folder, output)  # table=1, wardrobe=2
+    anchors = anchors_document(map_id, anchors=[anchor(), bare_anchor(), anchor("desk", surfaces=[])])
+    plain, floored = tmp_path / "out" / "plain.db", tmp_path / "out" / "floored.db"
+    build(tmp_path, folder, plain, anchors=anchors, extra=("--previous-seed", str(output)))
+    build(tmp_path, folder, floored, anchors=anchors, extra=("--previous-seed", str(output), "--id-floor", "2"))
+
+    first, second = read(plain), read(floored)
+    assert dump_rows(first) == dump_rows(second)
+    first.close()
+    second.close()
+    assert object_ids(floored)["desk"] == 3
+
+
+def test_an_id_floor_leaves_the_person_and_session_counters_alone(tmp_path, folder, output):
+    build(tmp_path, folder, output, extra=("--id-floor", "5"))
+    values = counters(output)
+    assert (values["person"], values["session"]) == (0, 0)
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "ten", "", " 3", "+3", "1_000", str(2**63)])
+def test_a_bad_id_floor_writes_nothing(tmp_path, folder, output, value, capsys):
+    argv = seed_argv(tmp_path, folder, output, extra=("--id-floor", value))
+
+    with pytest.raises(SystemExit) as stopped:
+        main(argv)
+
+    assert stopped.value.code == 2
+    assert "--id-floor" in capsys.readouterr().err
+    assert not output.parent.exists()
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.0, "3", 2**63])
+def test_write_seed_refuses_an_id_floor_that_is_not_a_whole_number_in_range(tmp_path, folder, map_id, output, value):
+    with pytest.raises(Refused, match="ID floor"):
+        write_seed(
+            folder=read_map_folder(folder), map_id=map_id, arena=ARENA, date=DATE, clock_kind="wall",
+            rooms_document=rooms_document(map_id), anchors_document=anchors_document(map_id),
+            catalogue_document=catalogue_document(), output=output, id_floor=value,
+        )  # fmt: skip
+    assert not output.parent.exists()
+
+
+def test_an_id_floor_at_the_largest_id_with_a_new_anchor_writes_no_seed(tmp_path, folder, output, capsys):
+    argv = seed_argv(tmp_path, folder, output, extra=("--id-floor", str(2**63 - 1)))
+
+    assert main(argv) == 1
+
+    err = capsys.readouterr().err
+    assert "Refused, and wrote nothing" in err
+    assert "Traceback" not in err
+    assert files_in(output.parent) == ["seed.db.lock"]
 
 
 # Replacing --output -----------------------------------------------------------------

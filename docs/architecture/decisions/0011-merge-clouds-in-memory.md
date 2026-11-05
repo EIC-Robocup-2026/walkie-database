@@ -26,7 +26,10 @@ same blobs many times a second.
   replay it.
 - Object ids do not wait for that write. They are reserved in blocks, in their
   own committed transaction with `synchronous = FULL`, before the node uses
-  them. A merged or discarded object keeps its row and its id, as a tombstone.
+  them. A block works only on the connection that reserved it, so the
+  connection that writes the objects reserves their ids, and a restart
+  reserves a new block. A merged or discarded object keeps its row and its id,
+  as a tombstone.
   The fields and the allocator are in migration 0004 and
   `src/walkie_database/objects.py`.
 

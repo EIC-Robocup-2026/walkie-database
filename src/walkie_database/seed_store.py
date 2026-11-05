@@ -9,7 +9,8 @@ Every path is an argument, and nothing has a default location::
 
     python -m walkie_database.seed_store --map-folder PATH --arena NAME \\
         --date YYYY-MM-DD --rooms PATH --anchors PATH --catalogue PATH \\
-        --clock-kind wall|ros_sim --output PATH [--previous-seed PATH] [--replace]
+        --clock-kind wall|ros_sim --output PATH [--previous-seed PATH] \\
+        [--id-floor N] [--replace]
 
 The inputs are YAML or JSON. All of them are read and checked before anything is
 written, so a bad input leaves no output, temporary file or lock file. The map ID
@@ -18,6 +19,12 @@ is computed from the map folder, never given.
 An anchor keeps its ID when a new seed is built from a previous one. A new key gets
 an ID above the previous high-water mark. An anchor that is gone stays as a
 tombstone, so its ID is never given to anything else.
+
+A previous seed does not know the IDs that a store restored from it has given out
+since. ``--id-floor N`` gives new keys IDs above N as well, and makes the seed's
+object counter at least N. N is the store's high-water mark, which the restore
+tool names when it refuses a seed that would give one of those IDs again. The
+default, 0, changes nothing.
 
 The same inputs and the same previous seed give the same rows. So ``created_at``
 comes from the date and the seed's ``store_id`` is a constant. The restore tool and
@@ -80,6 +87,7 @@ from walkie_map_id import make_map_id
 SCHEMA_VERSION = 1  # of the rooms, anchors and catalogue files
 SEED_STORE_ID = "seed"  # replaced by the restore tool and on every node start
 COUNTERS = ("object", "person", "session")
+LARGEST_ID = 2**63 - 1  # SQLite's largest INTEGER
 SEED_P_EXIST = 0.95  # what migration 0004 gives a map object
 GONE_P_EXIST = 0.05
 FINGERPRINT_WEIGHT = 1.0  # one real crop
@@ -504,9 +512,14 @@ def _build(
     anchors: Sequence[Anchor],
     catalogue: Sequence[CatalogueItem],
     lineage: Lineage,
+    id_floor: int = 0,
 ) -> None:
-    """Fill a new store from checked inputs and the old key-to-ID map, in one transaction."""
-    for name, value in lineage.counters.items():
+    """Fill a new store from checked inputs and the old key-to-ID map, in one transaction.
+
+    New keys get IDs above both the previous seed's object counter and *id_floor*.
+    """
+    counters = {**lineage.counters, "object": max(lineage.counters["object"], id_floor)}
+    for name, value in counters.items():
         conn.execute("UPDATE last_id SET id = ? WHERE table_name = ?", (value, name))
     kept = {key: previous.id for key, previous in lineage.anchors.items()}
     new_keys = [anchor.key for anchor in anchors if anchor.key not in kept]
@@ -641,10 +654,16 @@ def write_seed(
     output: str | Path,
     previous_seed: str | Path | None = None,
     replace: bool = False,
+    id_floor: int = 0,
 ) -> SeedSummary:
-    """Check every input, then write the seed at *output*, or raise and write nothing."""
+    """Check every input, then write the seed at *output*, or raise and write nothing.
+
+    New anchors get IDs above *id_floor*, as well as above the previous seed's.
+    """
     if clock_kind not in CLOCK_KINDS:
         raise Refused(f"The clock kind {clock_kind!r} is not one of {', '.join(CLOCK_KINDS)}.")
+    if isinstance(id_floor, bool) or not isinstance(id_floor, int) or not 0 <= id_floor <= LARGEST_ID:
+        raise Refused(f"The ID floor must be a whole number from 0 to {LARGEST_ID}, not {id_floor!r}.")
     rooms = parse_rooms(rooms_document, map_id)
     baseline_rev, anchors = parse_anchors(anchors_document, map_id, rooms)
     catalogue = parse_catalogue(catalogue_document)
@@ -674,7 +693,7 @@ def write_seed(
                 _build(
                     conn, map_id=map_id, digest=folder.digest, arena=arena, date=date,
                     clock_kind=clock_kind, baseline_rev=baseline_rev, rooms=rooms,
-                    anchors=anchors, catalogue=catalogue, lineage=lineage,
+                    anchors=anchors, catalogue=catalogue, lineage=lineage, id_floor=id_floor,
                 )
                 conn.execute("VACUUM INTO ?", (str(temp),))
             install_store(temp, target)
@@ -690,6 +709,13 @@ def write_seed(
 REFUSALS = (Refused, MapGateError, StoreLocked, OSError, sqlite3.Error)
 
 
+def _id_floor_argument(text: str) -> int:
+    """The value of --id-floor: digits only, from 0 to the largest ID."""
+    if re.fullmatch(r"[0-9]+", text) is None or int(text) > LARGEST_ID:
+        raise argparse.ArgumentTypeError(f"must be a whole number from 0 to {LARGEST_ID}, not {text!r}")
+    return int(text)
+
+
 def add_seed_arguments(parser: argparse.ArgumentParser) -> None:
     """The map, identity and output arguments that seed_store and seed_sim share."""
     parser.add_argument("--map-folder", required=True, help="the folder with map.yaml and its image")
@@ -699,6 +725,9 @@ def add_seed_arguments(parser: argparse.ArgumentParser) -> None:
                         help="wall on the robot, ros_sim in a simulation")
     parser.add_argument("--output", required=True, help="the seed file to write")
     parser.add_argument("--previous-seed", help="a closed seed of this map, whose anchor IDs carry over")
+    parser.add_argument("--id-floor", type=_id_floor_argument, default=0, metavar="N",
+                        help="give new anchors IDs above N, a store's high-water mark that the restore "
+                             "tool names (default 0)")
     parser.add_argument("--replace", action="store_true", help="replace --output if it exists")
 
 
@@ -729,6 +758,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             anchors_document=read_document(args.anchors, "anchors"),
             catalogue_document=read_document(args.catalogue, "catalogue"),
             output=args.output, previous_seed=args.previous_seed, replace=args.replace,
+            id_floor=args.id_floor,
         )
     except REFUSALS as error:
         print(f"Refused, and wrote nothing: {error}", file=sys.stderr)

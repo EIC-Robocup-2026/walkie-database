@@ -8,6 +8,7 @@ import pytest
 from seed_helpers import (
     anchor,
     anchors_document,
+    bare_anchor,
     dump_rows,
     map_id_of,
     rooms_document,
@@ -19,6 +20,7 @@ from walkie_database import restore as restore_tool
 from walkie_database import seed_store
 from walkie_database.db import connect, transaction
 from walkie_database.migrate import migrate
+from walkie_database.objects import NewObject, insert_object, reserve_object_ids
 from walkie_database.people import Refused
 from walkie_database.restore import main, restore
 from walkie_database.store_lock import StoreLock
@@ -194,6 +196,180 @@ def test_people_events_and_the_ledger_do_not_survive_a_restore(seed, db, folder)
     assert scalar(db, "SELECT count(*) FROM write_request") == 0
     assert scalar(db, "SELECT count(*) FROM session") == 0
     assert restored.counters["session"] == 9
+
+
+# A revised seed and the IDs a store has issued ---------------------------------------
+#
+# The seed fixture holds table=1 and wardrobe=2, with an object counter of 2. A seed
+# built from it knows nothing of the IDs a store restored from it gives out later.
+
+
+def issue_object_ids(db, folder, count=1, label="observed cup"):
+    """Reserve *count* IDs in a store and give the first to a movable object, as the node does.
+
+    Returns that first ID. The rest stay reserved and unused, as after a crash.
+    """
+    conn = connect(db)
+    try:
+        reservation = reserve_object_ids(conn, count)
+        with transaction(conn):
+            insert_object(
+                conn, NewObject(map_id_of(folder), label, 1.0, 1.0), reservation.first, reservation=reservation
+            )
+        return reservation.first
+    finally:
+        conn.close()
+
+
+def build_seed(tmp_path, folder, name, anchors, extra=()):
+    """A seed of the fixture's map at seeds/<name>, with these anchors."""
+    path = tmp_path / "seeds" / name
+    argv = seed_argv(tmp_path / name, folder, path, anchors=anchors_document(map_id_of(folder), anchors=anchors),
+                     extra=extra)  # fmt: skip
+    assert seed_store.main(argv) == 0
+    return path
+
+
+def object_row(path, object_id):
+    conn = connect(path, readonly=True)
+    try:
+        row = conn.execute("SELECT label, key, layer FROM object WHERE id = ?", (object_id,)).fetchone()
+        return None if row is None else tuple(row)
+    finally:
+        conn.close()
+
+
+def object_keys(path):
+    conn = connect(path, readonly=True)
+    try:
+        return {row["key"]: row["id"] for row in conn.execute("SELECT key, id FROM object")}
+    finally:
+        conn.close()
+
+
+def with_new_shelf(tmp_path, folder, seed, extra=()):
+    """The fixture's seed revised with --previous-seed, adding the anchor new_shelf."""
+    return build_seed(tmp_path, folder, "revised.db", [anchor(), bare_anchor(), anchor("new_shelf")],
+                      extra=("--previous-seed", str(seed), *extra))  # fmt: skip
+
+
+def test_a_revised_seed_cannot_give_an_issued_movable_id_to_a_new_anchor(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    cup = issue_object_ids(db, folder, count=2)  # ID 3 is the cup, and 4 stays reserved
+    revised = with_new_shelf(tmp_path, folder, seed)
+    # The seed alone cannot know: its counter was 2, so its new anchor took ID 3.
+    assert object_row(revised, cup) == ("new_shelf", "new_shelf", "anchor")
+    before = db.read_bytes()
+
+    with pytest.raises(Refused) as refused:
+        restore(revised, db, folder, "wall")
+
+    message = str(refused.value)
+    assert f"ID {cup}" in message
+    assert "'new_shelf'" in message
+    assert "up to 4" in message
+    assert "--id-floor 4" in message
+    assert "new path" in message
+    assert db.read_bytes() == before
+    assert object_row(db, cup) == ("observed cup", None, "movable")
+    assert counters(db)["object"] == 4
+
+
+def test_a_revised_seed_cannot_take_an_id_the_store_reserved_and_never_used(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    conn = connect(db)
+    reserve_object_ids(conn)  # ID 3, given out by a node that died before its insert
+    conn.close()
+    revised = with_new_shelf(tmp_path, folder, seed)
+    before = db.read_bytes()
+
+    with pytest.raises(Refused, match="--id-floor 3"):
+        restore(revised, db, folder, "wall")
+
+    assert db.read_bytes() == before
+
+
+def test_the_cli_refuses_a_seed_that_reuses_an_issued_id_and_names_the_way_out(seed, db, folder, tmp_path, capsys):
+    restore(seed, db, folder, "wall")
+    issue_object_ids(db, folder)
+    revised = with_new_shelf(tmp_path, folder, seed)
+    argv = ["--seed", str(revised), "--db", str(db), "--map-folder", str(folder), "--clock-kind", "wall", "--replace"]
+
+    assert main(argv) == 1
+
+    err = capsys.readouterr().err
+    assert "Refused, and changed nothing" in err
+    assert "--id-floor 3" in err
+    assert "Traceback" not in err
+
+
+def test_a_seed_rebuilt_above_the_stores_high_water_mark_restores(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    cup = issue_object_ids(db, folder, count=2)
+    revised = with_new_shelf(tmp_path, folder, seed, extra=("--id-floor", "4"))
+
+    restored = restore(revised, db, folder, "wall")
+
+    assert object_keys(db) == {"table": 1, "wardrobe": 2, "new_shelf": 5}
+    assert object_row(db, cup) is None  # movable objects never survive a restore
+    assert restored.counters["object"] == counters(db)["object"] == 5
+
+
+def test_a_revised_seed_restores_to_a_new_path_as_a_new_lineage(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    issue_object_ids(db, folder)
+    revised = with_new_shelf(tmp_path, folder, seed)
+    fresh = tmp_path / "other_run" / "walkie.db"
+
+    restore(revised, fresh, folder, "wall")
+
+    assert object_keys(fresh) == {"table": 1, "wardrobe": 2, "new_shelf": 3}
+
+
+def test_the_same_seed_restores_again_over_a_store_that_issued_ids(seed, db, folder):
+    restore(seed, db, folder, "wall")
+    cup = issue_object_ids(db, folder)
+
+    restored = restore(seed, db, folder, "wall")
+
+    assert object_keys(db) == {"table": 1, "wardrobe": 2}
+    assert object_row(db, cup) is None
+    assert restored.counters["object"] == cup
+
+
+def test_a_revised_seed_that_only_removes_an_anchor_restores(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    issue_object_ids(db, folder)
+    revised = build_seed(tmp_path, folder, "revised.db", [anchor()], extra=("--previous-seed", str(seed)))
+
+    restore(revised, db, folder, "wall")
+
+    # The wardrobe is a tombstone with its old ID, as the store had it.
+    assert object_keys(db) == {"table": 1, "wardrobe": 2}
+    assert scalar(db, "SELECT state FROM object WHERE key = 'wardrobe'") == "discarded"
+
+
+def test_an_anchor_missing_from_the_seed_does_not_block_a_restore(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    # A seed from no lineage at all, kept above the store's IDs.
+    other = build_seed(tmp_path, folder, "other.db", [anchor("desk", surfaces=[])], extra=("--id-floor", "2"))
+
+    restore(other, db, folder, "wall")
+
+    assert object_keys(db) == {"desk": 3}
+
+
+def test_a_seed_that_gives_a_stores_anchor_id_to_another_key_is_refused(seed, db, folder, tmp_path):
+    restore(seed, db, folder, "wall")
+    # Built without --previous-seed: desk sorts first, so it takes the table's ID 1.
+    other = build_seed(tmp_path, folder, "other.db", [anchor("desk", surfaces=[]), anchor()])
+    assert object_keys(other) == {"desk": 1, "table": 2}
+    before = db.read_bytes()
+
+    with pytest.raises(Refused, match="ID 1 to 'desk'.*--id-floor 2"):
+        restore(other, db, folder, "wall")
+
+    assert db.read_bytes() == before
 
 
 # A crash ---------------------------------------------------------------------------
