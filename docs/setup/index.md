@@ -19,3 +19,4 @@ steps in your own project, or when you add a new kind of memory.
 | [11. Seed tools, restore and the map gate](11-seed-restore-and-map-gate.md) | Builds a store's seed, resets a stopped store to it, and makes the node refuse the wrong store |
 | [12. Check observations and localize them](12-observations-and-localize.md) | Receives vision's arrays and checks them, serves `LocalizeObjects`, and creates no object rows |
 | [13. Serve object queries, the task's log and the snapshot](13-object-queries-and-events.md) | Answers the object reads and the event log from the stored rows, and publishes the seeded snapshot |
+| [14. Check the pair locally before pushing](14-pair-check.md) | Builds vision and this repository in their own environments, compares every type hash, and runs fake peers on the wire |

@@ -1,0 +1,12 @@
+# A synthetic seed input for tools/pair_check.py: one catalogue entry, so a
+# search for its alias returns a prior.
+schema_version: 1
+objects:
+- official_name: blue cup
+  category: cup
+  aliases: [mug]
+  default_place: table
+  weight_g: 250.0
+  attributes:
+    colour: blue
+    fragile: true

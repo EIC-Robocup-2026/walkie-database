@@ -9,7 +9,10 @@
     The harness that calls them is not, and no real world has been seeded yet.
 
 walkie-agent-ros plans to turn its agent into a
-[self-evolving agent](https://eic-robocup-2026.github.io/walkie-agent-ros/architecture/self-evolving-agent/).
+[self-evolving agent](https://github.com/EIC-Robocup-2026/walkie-agent-ros/blob/91ffe25cc411700e2fac33adbbd815998a3296c9/docs/architecture/self-evolving-agent.md).
+This link and the two other agent pages this page cites by commit, access levels
+and Competition Mode, point to walkie-agent-ros commit `91ffe25`. The agent plans to
+withdraw those pages, and has no replacement pages yet.
 The agent gets small typed tools, called atomics, which it chains into
 bundles. It also writes tools of its own: drafts in simulation, and
 session-only tools at Competition when the run profile allows. To learn
@@ -47,8 +50,9 @@ database during an episode.
 - **Generated tools only read memory.** At every access level, they reach
   memory only through `find_objects`. This holds while `start_session`,
   `end_session`, `remember_person`, `match_faces` and `match_appearances`
-  are on walkie-agent-ros's never-list at every level. Only the agent's
-  planned people memory client is to call them. That never-list does not
+  are on walkie-agent-ros's never-list at every level, with `remember_event`,
+  `find_events` and the five object writes. Only the agent's planned people memory
+  client is to call the people services. That never-list does not
   exist yet, so
   Unrestricted harvest runs must not start until it names them
   ([How the self-evolving agent reaches memory](#how-the-self-evolving-agent-reaches-memory)).
@@ -271,9 +275,11 @@ a sim that someone runs by hand on another domain and router.
 ## How the self-evolving agent reaches memory
 
 walkie-agent-ros runs generated tools at one of three
-[access levels](https://eic-robocup-2026.github.io/walkie-agent-ros/architecture/access-levels/).
+[access levels](https://github.com/EIC-Robocup-2026/walkie-agent-ros/blob/91ffe25cc411700e2fac33adbbd815998a3296c9/docs/architecture/access-levels.md).
 Only Competition may run on the real robot. Standard and Unrestricted run
-only on a marked sim host.
+only on a marked sim host. The link is to the page at walkie-agent-ros commit
+`91ffe25`, because the agent plans to withdraw it and has no replacement page
+yet. This section depends on the levels as that page defines them.
 
 | Level | How a generated tool reaches memory | Can it write? |
 | ----- | ----------------------------------- | ------------- |
@@ -296,14 +302,26 @@ the never-list too. walkie-agent-ros's planned `config/access_levels.toml`
 does not exist yet. The walkie-agent-ros change that adds the people memory
 client must create it with these five services at every level, and a test
 there must check that. Until then, Unrestricted harvest runs must not
-start, because Unrestricted code could call any of them. The node
-subscribes to no topic today.
-Topics it may subscribe to later, such as detections, stay covered while
-Unrestricted publishing is limited to base commands.
+start, because Unrestricted code could call any of them.
 
-A future read-only service, such as a rooms query, works the other way
-round. Standard reaches it only once the allow-list names it, and
-Competition only through a new atomic.
+The node also serves the object services
+([The object contract](database.md#the-object-contract)). Two of them change the
+same rule:
+
+- `remember_event` writes a line to the task's log, and `find_events` returns
+  lines that can carry a `person_id`. Both belong on the never-list with the
+  people services, until a reviewed atomic is meant to call them.
+- `set_object_state`, `report_sighting`, `arena_reset`, `submit_detections` and
+  `describe_object` answer `NOT_READY` and keep nothing today. They will write once
+  object memory exists, so the never-list should name them now.
+
+In memory mode, the node subscribes to vision's arrays on `/walkie_vision/objects`
+and publishes `/walkie_database/objects/snapshot`. The subscription stays covered
+while Unrestricted publishing is limited to base commands.
+
+The object reads, such as `search_objects` and `list_rooms`, work the other way
+round. Standard reaches one only once the allow-list names it, and Competition only
+through a new atomic.
 
 ## Later
 
@@ -312,17 +330,14 @@ decision when it comes.
 
 ### A rooms query
 
-The node serves `FindObjects` and the people and session services, but
-nothing about rooms. Until it serves rooms, the agent
-answers room questions with its existing `list_locations` tool.
+In memory mode, the node serves `ListRooms` and `GetRoomContents` from the seed's
+rows ([Object queries](database.md#object-queries)). The agent does not call them
+yet. It answers room questions with its existing `list_locations` tool, and
 walkie-agent-ros has no separate rooms tool.
 
-`ListRooms` and `GetRoomContents` are already defined in `walkie_database_msgs`
-([ADR-0019](decisions/0019-object-service-contracts.md)), and
-[ADR-0021](decisions/0021-rooms-and-object-queries.md) stores their rows. The node
-does not serve them yet. walkie-agent-ros bumps its pin and rebuilds the package to
-use them. The sim seed already writes the rows they would answer with, so the sim
-and the robot would answer the same way.
+walkie-agent-ros bumps its pin and rebuilds the package to use them. The sim seed
+writes the same kind of rows as a robot seed, so the sim and the robot would answer
+the same way.
 
 ### Detections from oracle perception or walkie-vision
 
@@ -444,7 +459,8 @@ The harvest keeps all of that out:
   the web in the same turn. Its search query is written by a separate
   model call from the visitor's words only, so memory never reaches a
   query (see walkie-agent-ros's
-  [Competition Mode](https://eic-robocup-2026.github.io/walkie-agent-ros/architecture/competition/#web-search)).
+  [Competition Mode](https://github.com/EIC-Robocup-2026/walkie-agent-ros/blob/91ffe25cc411700e2fac33adbbd815998a3296c9/docs/architecture/competition.md#web-search),
+  at commit `91ffe25`).
 
 ## Testing
 
@@ -507,9 +523,9 @@ real world's map yet.
 5. **Node start and restore time.** Not measured. Recommended: measure them in the
    harvest's smoke run, next to the sim's readiness wait. Blocks: the
    harness's time budget per episode.
-6. **The rooms query.** Its types exist, and the node does not serve them yet.
-   Recommended: not before the harvest needs it; `list_locations` answers room
-   questions meanwhile. Blocks: answering room questions from memory.
+6. **The rooms query.** The node serves it in memory mode, and the agent does not
+   call it yet. Recommended: not before the harvest needs it; `list_locations`
+   answers room questions meanwhile. Blocks: answering room questions from memory.
 7. **Ingestion in the sim.** The message type and topic, oracle embeddings, and
    drift. The clock is settled
    ([ADR-0023](decisions/0023-offline-restore-and-map-gate.md)). Recommended:

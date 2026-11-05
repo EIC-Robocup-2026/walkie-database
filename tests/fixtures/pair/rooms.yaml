@@ -1,0 +1,17 @@
+# A synthetic seed input for tools/pair_check.py. Two made-up 4 m rooms on the
+# 2 by 2 map in map/. Nothing here comes from a real arena.
+schema_version: 1
+map_id: pairlab-2026-11-05-517bef3e
+rooms:
+- key: living_room
+  name: living room
+  description: The living room.
+  floor: 0
+  polygon: [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]
+  stand_pose: [1.0, 1.0, 0.0]
+- key: kitchen_room
+  name: kitchen room
+  description: The kitchen room.
+  floor: 0
+  polygon: [[5.0, 0.0], [9.0, 0.0], [9.0, 4.0], [5.0, 4.0]]
+  stand_pose: [6.0, 1.0, 0.0]

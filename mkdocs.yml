@@ -95,6 +95,7 @@ nav:
       - 11. Seed Tools, Restore and the Map Gate: setup/11-seed-restore-and-map-gate.md
       - 12. Check Observations and Localize Them: setup/12-observations-and-localize.md
       - 13. Serve Object Queries, the Task's Log and the Snapshot: setup/13-object-queries-and-events.md
+      - 14. Check the Pair Locally Before Pushing: setup/14-pair-check.md
   - Architecture:
       - architecture/index.md
       - The Database: architecture/database.md

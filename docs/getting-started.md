@@ -57,6 +57,12 @@ The tests use throwaway databases and need no robot. They run on Fast DDS,
 so they need no Zenoh router either. All tests should pass. If you skipped
 the import or the build, they stop at once and tell you what to run.
 
+!!! tip "Changing a message type? Check the pair too"
+    A change to a type here, or in walkie-vision, can pass each repository's tests
+    and still break the two together. Before you push one, commit both sides, pin the
+    vision commit, and run the local pair gate:
+    [Check the pair locally before pushing](setup/14-pair-check.md).
+
 ## 4. Run the database node
 
 Every `pixi run` uses the Zenoh middleware, like walkie-ros and the robot

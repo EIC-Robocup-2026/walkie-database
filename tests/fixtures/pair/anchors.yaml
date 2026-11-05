@@ -1,0 +1,24 @@
+# A synthetic seed input for tools/pair_check.py: a measured table with one
+# surface, and a wardrobe known only by name.
+schema_version: 1
+map_id: pairlab-2026-11-05-517bef3e
+baseline_rev: ''
+anchors:
+- key: table
+  label: table
+  room_key: living_room
+  geometry_valid: true
+  enclosed: false
+  center: [2.0, 2.0, 0.4]
+  size: [1.0, 0.5, 0.8]
+  yaw: 0.0
+  surfaces:
+  - key: table_top
+    z: 0.8
+    outline: [[1.5, 1.75], [2.5, 1.75], [2.5, 2.25], [1.5, 2.25]]
+- key: wardrobe
+  label: wardrobe
+  room_key: living_room
+  geometry_valid: false
+  enclosed: true
+  surfaces: []

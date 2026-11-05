@@ -65,6 +65,9 @@ them by meaning, by position and by words.
   restore a stopped store, under its lock. In memory mode, the node refuses to start
   on the wrong map, digest, baseline or clock
   ([ADR-0023](decisions/0023-offline-restore-and-map-gate.md)).
+- **The pair is checked locally before a push.** A local gate builds each side in
+  its own environment, compares every type hash, and runs fake peers on the wire
+  ([Checking the pair](#checking-the-pair)).
 
 ## The parts
 
@@ -1346,6 +1349,58 @@ make an old anchor look freshly seen.
 - A polygon whose edges cross is not detected.
 - `flock` is reliable on a local disk only. Do not keep a store on NFS.
 
+## Checking the pair
+
+`tools/pair_check.py` checks a walkie-vision commit and a commit of this repository
+against each other, on one computer, before either is pushed
+([ADR-0024](decisions/0024-local-pair-gate.md)). Each side runs in its own
+environment. [Setup step 14](../setup/14-pair-check.md) shows how to run it and
+read its report.
+
+### The M0 evidence
+
+The object memory's first milestone, M0, needs the two repositories to agree on
+every type and to exchange real messages. The gate's checks are that evidence:
+
+| M0 needs | The gate's checks |
+| -------- | ----------------- |
+| Both sides are committed, and the pin is the tested vision commit | `sources`, `pin`, `locks` |
+| Each side imports only its own builds | `probe.vision`, `probe.database`, `control.import` |
+| Every type hash agrees, nested types included | `hashes`, `control.hash` |
+| Observations cross the wire, are checked and counted, and create no object row | `observe.*`, `store-rows` |
+| `LocalizeObjects` uses the transform at the array's stamp, and keeps each index | `localize` |
+| Each side calls the other's services, and the five writes answer `NOT_READY` | `database-services`, `vision-services` |
+| Nothing is left running | `processes`, `teardown` |
+
+On 2026-11-05 the gate passed locally, with walkie-vision at the commit that
+`ros2_ws.repos` pins. Its report names this repository's own commit, so it is kept
+with the handoff, outside Git. Remote CI has not run the gate. A pass says nothing
+about real models, a camera, Zenoh, the sim or the robot.
+
+### What other repositories must do
+
+The pair gate does not stand in for the repositories that use these types. Each owner
+must rebuild against the tested commits and run its own checks. Nothing in this table
+is done yet.
+
+| Repository | Area | What it must do |
+| ---------- | ---- | --------------- |
+| walkie-agent-ros | Pins | Pin walkie-vision at the tested commit, and move walkie-database from `7f657b0` to the tested commit. Use full SHAs, never a branch. Record the pair report |
+| walkie-agent-ros | Build | Add the walkie-vision clone to `clone-ros2-ws`'s outputs, add `walkie_vision_msgs` to `build-ros2`'s package list, declare `ros-jazzy-vision-msgs`, and rebuild both packages |
+| walkie-agent-ros | Live vision and memory | Keep live vision and memory apart. `SearchObjects` and `FindObjects` never mean "currently visible". Add memory atomics for the object reads and the log, with `ObjectQuery`'s filters as their arguments |
+| walkie-agent-ros | What the model sees | Strip `vectors`, clouds and poses from every tool output ([For agent clients](#for-agent-clients)). Database ids are decimal strings, and a live `obj_` reference is never cast to one |
+| walkie-agent-ros | Writes | Call `RememberEvent` from the event atomic. Never report a detection as remembered while the writes answer `NOT_READY`. Name the writes on the never-list ([Sim Harvest Support](harvest.md#how-the-self-evolving-agent-reaches-memory)) |
+| walkie-ros | Types | Pin and build `walkie_vision_msgs` wherever the arrays are used, with `vision_msgs` declared. Rebuild every subscriber and client of `ObjectDetection` and `ObjectDetectionArray` |
+| walkie-ros | Map identity | Use `walkie_map_id.py` and its golden fixtures when preparing maps, keep its file hash in the deployment manifest, and use `GetStoreStatus` as the one map check |
+| walkie-ros | Camera and TF | Supply registered RGB-D with capture stamps, TF at those stamps, and a consistent `/clock` in the sim |
+| walkie-ros | Localize | Move callers to `LocalizeObjects`, keeping each entry's status. Keep `/get_3d_poses` until every old caller and GraspNet have moved |
+| walkie-ros | Memory reads and MoveIt | Build `walkie_database_msgs` at the tested commit for any later reads, events or scene bridge. Keep `walkie_database/<id>` collision names ([ADR-0013](decisions/0013-publish-boxes-to-rviz-and-moveit.md)) |
+
+Hardware checks are open too. A run with model files and a GPU must measure memory,
+CLIP latency and the 5 Hz stream. A registered RGB-D recording must measure mask and
+depth alignment and point error. The robot must measure TF, calibration, localizer
+accuracy and query latency under load. No fake test stands in for these.
+
 ## What lives where
 
 | What                              | Where                                       | In Git |
@@ -1369,6 +1424,9 @@ make an old anchor look freshly seen.
 | The walkie-vision commit they nest | `ros2_ws.repos`                            | Yes    |
 | The clone of that commit          | `ros2_ws/src/walkie-vision/`, written by `pixi run import-interfaces` | No |
 | Their build                       | `ros2_ws/build/`, `install/` and `log/`, written by `pixi run build-msgs` | No |
+| The pair gate and its peers       | `tools/pair_check.py`, `tools/contract_peer.py` | Yes |
+| The pair gate's seed inputs       | `tests/fixtures/pair/`                      | Yes    |
+| A pair report, its run files and the client overlay | The `--report` file's folder ([setup step 14](../setup/14-pair-check.md#step-3-read-the-report)) | No |
 
 !!! tip "Back up with `VACUUM INTO`, not `cp`"
     While the node runs, recent changes may still be in `walkie.db-wal`, so
@@ -1462,3 +1520,7 @@ The sim harvest decision, ADR-0016, is on the
 ??? note "ADR-0023: Restore a stopped store offline, and gate the node on its map · Proposed"
 
     --8<-- "architecture/decisions/0023-offline-restore-and-map-gate.md:body"
+
+??? note "ADR-0024: Check the vision and database pair locally, each side in its own environment · Proposed"
+
+    --8<-- "architecture/decisions/0024-local-pair-gate.md:body"

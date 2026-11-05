@@ -39,5 +39,9 @@ jobs:
       - name: Build the message packages
         run: pixi run build-msgs
 
+      # These tests include tests/test_pair_check.py, which checks the pair gate's
+      # own parts. The gate itself, tools/pair_check.py, runs locally for now: it
+      # needs both worktrees. Once the pinned walkie-vision commit is on GitHub,
+      # this job should run it against that pin.
       - name: Run tests
         run: pixi run test

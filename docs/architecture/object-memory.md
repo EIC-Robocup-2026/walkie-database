@@ -269,8 +269,11 @@ with objects from other programs.
     - **Grasping.** MoveIt refuses to plan the gripper into a collision box.
       Before a grasp, the target must be attached to the gripper or removed
       from the scene, and the node must stop sending it back until it is
-      released. Who asks, and how, belongs with the
-      [arm manipulation design](https://eic-robocup-2026.github.io/walkie-agent-ros/architecture/manipulation/).
+      released. Who asks, and how, belongs with walkie-agent-ros's arm
+      manipulation design. The
+      [page at commit `91ffe25`](https://github.com/EIC-Robocup-2026/walkie-agent-ros/blob/91ffe25cc411700e2fac33adbbd815998a3296c9/docs/architecture/manipulation.md)
+      is the last one published. The agent plans to replace it, and the replacement
+      is not published yet.
     - **Planning frame.** MoveIt keeps world objects fixed in its planning
       frame. If walkie-ros plans in a frame attached to the robot, such as
       `base_link`, the objects would drive along with it. Check the virtual
