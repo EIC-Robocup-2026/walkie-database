@@ -554,6 +554,18 @@ def test_a_reseed_carries_the_person_and_session_counters(tmp_path, folder, map_
     assert values["object"] == object_ids(second)["desk"] == 61
 
 
+def test_a_reseed_carries_the_event_counter(tmp_path, folder, map_id, output):
+    build(tmp_path, folder, output)
+    conn = connect(output)
+    with transaction(conn):
+        conn.execute("UPDATE last_id SET id = 70 WHERE table_name = 'event'")
+    conn.close()
+
+    second = reseed(tmp_path, folder, map_id, output, [anchor()])
+
+    assert counters(second)["event"] == 70
+
+
 def test_a_reseed_can_read_a_previous_seed_with_a_wal(tmp_path, folder, map_id, output):
     build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=[anchor()]))
     conn = connect(output)

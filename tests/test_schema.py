@@ -295,16 +295,20 @@ def test_only_one_session_can_be_open(db):
 
 
 def test_last_id_keeps_the_largest_id_ever_given(db):
+    add_map(db)
     db.execute("INSERT INTO session (id, started_at, ended_at) VALUES (7, 0, 1)")
     db.execute("INSERT INTO person (id, first_seen, last_seen) VALUES (5, 0, 0)")
+    db.execute("INSERT INTO event (id, ts, kind, text, map_id) VALUES (4, 0, 'note', 'x', 'm1')")
     db.execute("DELETE FROM session")
     db.execute("DELETE FROM person")
+    db.execute("DELETE FROM event")
     # SQLite gives the same ids again. last_id does not go back.
     db.execute("INSERT INTO session (started_at) VALUES (0)")
     db.execute("INSERT INTO person (first_seen, last_seen) VALUES (0, 0)")
+    db.execute("INSERT INTO event (ts, kind, text, map_id) VALUES (0, 'note', 'x', 'm1')")
 
     rows = db.execute("SELECT table_name, id FROM last_id ORDER BY table_name")
-    assert [tuple(row) for row in rows] == [("object", 0), ("person", 5), ("session", 7)]
+    assert [tuple(row) for row in rows] == [("event", 4), ("object", 0), ("person", 5), ("session", 7)]
 
 
 def test_migration_0003_closes_all_but_the_newest_open_session():

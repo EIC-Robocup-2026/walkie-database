@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from walkie_database.db import MEMORY, connect, transaction
+from walkie_database.events import REMEMBER_EVENT
 from walkie_database.map_config import (
     CLOCK_KINDS,
     FRAME_ID,
@@ -86,7 +87,7 @@ from walkie_map_id import make_map_id
 
 SCHEMA_VERSION = 1  # of the rooms, anchors and catalogue files
 SEED_STORE_ID = "seed"  # replaced by the restore tool and on every node start
-COUNTERS = ("object", "person", "session")
+COUNTERS = ("object", "person", "session", "event")
 LARGEST_ID = 2**63 - 1  # SQLite's largest INTEGER
 SEED_P_EXIST = 0.95  # what migration 0004 gives a map object
 GONE_P_EXIST = 0.05
@@ -421,6 +422,27 @@ class Lineage:
     anchors: dict[str, PreviousAnchor]
 
 
+def read_counters(conn: sqlite3.Connection) -> dict[str, int]:
+    """The largest ID ever given in each table of COUNTERS, from ``last_id``.
+
+    A store from before migration 0007 has no event counter. It gets the value that
+    migration starts the counter at: the largest event ID in the log or in a
+    ``remember_event`` outcome of the ledger. A store from before migration 0006 has
+    neither table, and so has no event IDs.
+    """
+    counters = {row["table_name"]: row["id"] for row in conn.execute("SELECT * FROM last_id")}
+    has_log = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'event'").fetchone()
+    if "event" not in counters and has_log:
+        counters["event"] = conn.execute(
+            """SELECT max((SELECT coalesce(max(id), 0) FROM event),
+                          (SELECT coalesce(max(json_extract(outcome_json, '$.event_id')), 0)
+                           FROM write_request
+                           WHERE operation = ? AND json_type(outcome_json, '$.event_id') = 'integer'))""",
+            (REMEMBER_EVENT,),
+        ).fetchone()[0]
+    return {name: counters.get(name, 0) for name in COUNTERS}
+
+
 def read_lineage(path: Path, map_id: str, digest: str) -> Lineage:
     """The anchor IDs and the counters of a previous seed of this map, or Refused."""
     if not path.is_file():
@@ -438,7 +460,7 @@ def read_lineage(path: Path, map_id: str, digest: str) -> Lineage:
                 f"The previous seed {path} is not of the map {map_id}. "
                 "A new map starts a new lineage, so build its seed without --previous-seed."
             )
-        counters = {r["table_name"]: r["id"] for r in conn.execute("SELECT * FROM last_id")}
+        counters = read_counters(conn)
         room_key = "r.key" if version >= 6 else "NULL"
         anchors = {
             r["key"]: PreviousAnchor(r["id"], r["label"], r["room_key"])
@@ -449,7 +471,7 @@ def read_lineage(path: Path, map_id: str, digest: str) -> Lineage:
                 (map_id,),
             )
         }
-    return Lineage({name: counters.get(name, 0) for name in COUNTERS}, anchors)
+    return Lineage(counters, anchors)
 
 
 def check_seed_contents(conn: sqlite3.Connection, what: object) -> None:

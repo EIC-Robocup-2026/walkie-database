@@ -42,10 +42,15 @@ answer, and must not write twice.
   waiting at most 50 ms, and never the latest transform instead. With no transform
   the line is kept with no pose and no room. The lookup runs before the
   transaction, and only for a line that is not a retry.
+- An event id is never given twice. `last_id` has an `event` counter, which a
+  trigger keeps at the largest id ever given, and `add_event` gives a new line the
+  next id. Migration 0007 adds it, and starts it above every event id in the log and
+  in the ledger.
 - The ledger outcome of `RememberEvent` is the event's id and time. A retry reads
-  the line back by that id, and returns its text only when the line is still there
-  with the same time and task. Otherwise it returns the id and time with empty text
-  and no person or session.
+  the line back by that id. A row with that id is the line. No row means the line
+  was forgotten, and the retry returns the id and time with empty text and no person
+  or session. The time and task are compared as well, for an id that SQLite gave
+  twice before migration 0007.
 
 **Consequences**
 
@@ -59,14 +64,19 @@ answer, and must not write twice.
 - Forgetting a session does not read `write_request`. So an outcome holds ids and
   statuses only, never an event's text or a person's details. A payload hash stays,
   and it could confirm a guessed sentence, but it cannot be read back.
-- `event.id` is a plain `INTEGER PRIMARY KEY`, so SQLite can give an id again after
-  the newest event is deleted. A recorded outcome can then name an id that now means
-  another line. Treat an event id as valid only until its session is forgotten.
+- An event id names one line for the whole store lineage. A forgotten line's id is
+  never given to a newer line, even at the same time and task, which a paused sim
+  clock makes common. The restore carries the counter
+  ([ADR-0023](/architecture/decisions/0023-offline-restore-and-map-gate.md)).
+- The counter commits with its line under `synchronous = NORMAL`. A power cut can
+  lose the last commits, and the line, its ledger row and the counter go together.
+  A client that already had the reply then holds an id that can be given again.
+  Session and person ids share this limit. Object ids avoid it with a `FULL`
+  reservation.
+- An id that SQLite gave twice before migration 0007 stays given twice. A retry of
+  the older line can still show the newer line's text, if their time and task match.
 - The ledger grows until a restore clears it. An outcome is at most 4 KiB, and most
   are far smaller.
-- A forgotten line's retry shows a newer line's text only if that line got the same
-  id, the same time and the same task. A sim clock that restarts within one store
-  lineage makes an equal time possible, but not likely.
 - The TF wait blocks the executor for up to 50 ms when the robot's pose is missing.
   A pose a moment old is not used, so a line written while TF lags has no pose.
 - The event kinds and the ledger's bounds live in the helpers, so a new kind or limit

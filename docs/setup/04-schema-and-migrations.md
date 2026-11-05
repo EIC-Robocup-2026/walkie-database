@@ -25,6 +25,7 @@ file is missing.
 | `src/walkie_database/migrations/0004_object_lifecycle.sql` | Adds the object lifecycle fields, run identity and an object id counter ([below](#migration-0004-object-lifecycle-fields)) |
 | `src/walkie_database/migrations/0005_object_vector_filters.sql` | Adds state and layer to the object vector table's metadata ([below](#migration-0005-object-vector-filters)) |
 | `src/walkie_database/migrations/0006_object_context.sql` | Adds room keys, surfaces, the catalogue, relations, the task's log and retried writes ([below](#migration-0006-object-context)) |
+| `src/walkie_database/migrations/0007_unique_event_ids.sql` | Keeps event ids from being given twice ([below](#migration-0007-event-ids)) |
 | `src/walkie_database/migrate.py`             | Finds the migrations and applies the missing ones |
 | `src/walkie_database/objects.py`             | Reserves object ids, writes new object rows, tombstones and vectors, and searches vectors |
 | `src/walkie_database/object_context.py`      | Records and reads what migration 0006 adds       |
@@ -317,3 +318,29 @@ restart. It also checks that an upgraded database and a new one end with the sam
 schema. `tests/test_object_context.py` covers the cascades, the relation rules, the
 word index after an insert, an update and a delete, and what forgetting a session
 takes with it, including a test that shows the foreign key alone would keep the text.
+
+## Migration 0007: event ids
+
+Added on 2026-11-05. `event.id` is a plain `INTEGER PRIMARY KEY`, so SQLite gave a
+new line the id of a deleted newest line. Forgetting a session deletes lines, and a
+retried `remember_event` reads its line back by the recorded id. So a retry could
+return another request's text. Comparing the time and the task does not fix it,
+because a paused sim clock gives every line of a task the same time
+([ADR-0022](../architecture/decisions/0022-task-event-log.md)).
+
+`0007_unique_event_ids.sql` adds an `event` counter to `last_id`, the same way
+[migration 0004](#migration-0004-object-lifecycle-fields) added `object`: it stages
+the counters in a temporary table, creates the table again with the wider `CHECK`,
+and creates the triggers again, with a new `event_last_id`. `add_event` gives a new
+line the counter plus one.
+
+**The counter starts above the ledger too.** A `remember_event` outcome in
+`write_request` can name a line that a forgotten session already took, and a client
+was given that id. So the counter starts at the larger of the largest event id and
+the largest integer `event_id` in those outcomes.
+
+`tests/test_migration_upgrades.py` upgrades a store at schema 6 whose ledger names a
+forgotten newest line, and checks the counter, every trigger, running twice, and a
+copy that fails at its last statement. `tests/test_events.py` and
+`tests/test_object_context.py` check that an id is not given again after a forget, a
+delete or a restart.

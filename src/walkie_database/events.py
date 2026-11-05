@@ -141,10 +141,12 @@ def remember_event(
 def _recorded(conn: sqlite3.Connection, new: NewEvent, outcome: dict, map_id: str) -> EventRecord:
     """The first answer to a retried request.
 
-    An id can be given again after the newest event is deleted, so the id alone does
-    not prove that the row is the same one. A line that is gone keeps its id and time
-    and has no text. The retry's own text is not stored or echoed, because the line
-    was forgotten on purpose.
+    An event id is never given twice (migration 0007), so the row with the recorded
+    id is the recorded line, and no row means the line was forgotten. The time and
+    the task are compared too. That only matters for an id that SQLite gave twice
+    before migration 0007, or that a writer outside the node let SQLite choose. A
+    line that is gone keeps its id and time and has no text. The retry's own text is
+    not stored or echoed, because the line was forgotten on purpose.
     """
     row = conn.execute("SELECT * FROM event WHERE id = ?", (outcome["event_id"],)).fetchone()
     if row is not None and row["ts"] == outcome["ts"] and row["task_id"] == new.task_id:

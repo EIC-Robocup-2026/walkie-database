@@ -1,11 +1,12 @@
 """RememberEvent and FindEvents: the pose, retries, privacy and the search."""
 
 import pytest
-from query_helpers import KITCHEN, NOW, Store, at, nowhere
+from query_helpers import KITCHEN, MAP_ID, NOW, Store, at, nowhere
 
 from walkie_database import people
-from walkie_database.db import transaction
+from walkie_database.db import connect, transaction
 from walkie_database.events import REMEMBER_EVENT, NewEvent
+from walkie_database.migrate import migrate
 from walkie_database.object_context import WriteConflict, record_write
 from walkie_database.people import Refused
 
@@ -238,12 +239,55 @@ def test_a_retry_of_a_forgotten_line_never_shows_a_newer_line_with_its_id(store)
     forgotten = repo.remember_event(event(text="The guest likes tea.", person_id=met.person_id), now=NOW)
     people.end_session(store.conn, met.session_id)
     newer = repo.remember_event(event(request_id="r2", task_id="t2", text="Opened the door."), now=NOW + 1)
-    assert newer.id == forgotten.id  # SQLite gave the id again
+    assert newer.id == forgotten.id + 1  # the forgotten line's id is not given again
 
     again = repo.remember_event(event(text="The guest likes tea.", person_id=met.person_id), now=NOW + 2)
 
     assert again.text == ""
     assert again.ts == forgotten.ts
+
+
+def test_a_retry_of_a_forgotten_line_never_shows_another_line_of_its_time_and_task(store):
+    # A paused sim clock gives every line of a task the same time, so neither tells
+    # two lines apart.
+    met = person(store.conn)
+    repo = store.repository(locate=nowhere)
+    forgotten = repo.remember_event(event(text="The guest chose tea.", person_id=met.person_id), now=NOW)
+    people.end_session(store.conn, met.session_id)
+    newer = repo.remember_event(event(request_id="r2", text="Opened a door."), now=NOW)
+
+    again = repo.remember_event(event(text="The guest chose tea.", person_id=met.person_id), now=NOW)
+
+    assert again.text == ""
+    assert (again.id, again.ts, again.task_id) == (forgotten.id, forgotten.ts, forgotten.task_id)
+    assert (again.person_id, again.session_id) == (0, 0)
+    assert newer.id == forgotten.id + 1
+    assert [row["text"] for row in rows(store, "event")] == ["Opened a door."]
+
+
+def test_a_retry_after_a_restart_never_shows_a_newer_line_with_the_forgotten_id(tmp_path):
+    # The counter is in the file, so a restart does not let the id be given again.
+    path = tmp_path / "walkie.db"
+    conn = connect(path)
+    migrate(conn)
+    store = Store(conn)
+    met = person(conn)
+    forgotten = store.repository(locate=nowhere).remember_event(
+        event(text="The guest chose tea.", person_id=met.person_id), now=NOW
+    )
+    people.end_session(conn, met.session_id)
+    conn.close()
+
+    conn = connect(path)
+    migrate(conn)
+    repo = Store.existing(conn, MAP_ID).repository(locate=nowhere)
+    newer = repo.remember_event(event(request_id="r2", text="Opened a door."), now=NOW)
+    again = repo.remember_event(event(text="The guest chose tea.", person_id=met.person_id), now=NOW)
+    conn.close()
+
+    assert again.text == ""
+    assert again.id == forgotten.id
+    assert newer.id == forgotten.id + 1
 
 
 def test_the_ledger_never_holds_the_text(store):

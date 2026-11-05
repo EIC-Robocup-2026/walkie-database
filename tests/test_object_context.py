@@ -784,6 +784,38 @@ def test_a_rolled_back_event_is_not_in_the_index(store):
     check_index(store)
 
 
+def test_an_event_id_is_not_given_again_after_a_delete(store):
+    with transaction(store):
+        event_id = add_event(store, "m1", "note", "saw a red cup", 1.0)
+    with transaction(store):
+        store.execute("DELETE FROM event WHERE id = ?", (event_id,))
+    with transaction(store):
+        assert add_event(store, "m1", "note", "saw a blue plate", 1.0) == event_id + 1
+    assert fts_ids(store, "cup") == []
+    check_index(store)
+
+
+def test_an_event_id_is_not_given_again_after_a_restart(tmp_path, store):
+    with transaction(store):
+        event_id = add_event(store, "m1", "note", "saw a red cup", 1.0)
+    with transaction(store):
+        store.execute("DELETE FROM event WHERE id = ?", (event_id,))
+    store.close()
+    reopened = connect(tmp_path / "walkie.db")
+    with transaction(reopened):
+        assert add_event(reopened, "m1", "note", "saw a blue plate", 1.0) == event_id + 1
+    reopened.close()
+
+
+def test_an_event_inserted_outside_add_event_moves_the_counter(store):
+    # A writer that is not the node, such as a manual sqlite3 session, still counts.
+    with transaction(store):
+        store.execute("INSERT INTO event (id, ts, kind, text, map_id) VALUES (70, 1, 'note', 'hand', 'm1')")
+        store.execute("DELETE FROM event WHERE id = 70")
+    with transaction(store):
+        assert add_event(store, "m1", "note", "saw a red cup", 1.0) == 71
+
+
 def test_an_event_stores_what_it_was_given(furniture):
     store, _ = furniture
     with transaction(store):

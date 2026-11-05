@@ -59,8 +59,8 @@ them by meaning, by position and by words.
   read time. It invents no fusion
   ([Object queries](#object-queries)).
 - **The task's log forgets with the session.** A line that names a person goes
-  with that person's session, and is not left with an empty link
-  ([ADR-0022](decisions/0022-task-event-log.md)).
+  with that person's session, and is not left with an empty link. Its id is never
+  given to another line ([ADR-0022](decisions/0022-task-event-log.md)).
 - **A store starts from a seed, and the node checks it.** Offline tools build and
   restore a stopped store, under its lock. In memory mode, the node refuses to start
   on the wrong map, digest, baseline or clock
@@ -569,9 +569,12 @@ That is not the node's latency under load, and no test asserts a time.
 - It writes the line and its [ledger row](#retried-writes) in one transaction. A
   retry with the same `request_id` gets the first answer, writes nothing and looks
   up no transform.
-- A retry of a line whose session was forgotten gets its id and time back, with
-  empty text and no person or session. The line is read back only when its id, time
-  and task all match, because SQLite can give a deleted line's id again.
+- A retry reads its line back by the id in its ledger row. An event id is never
+  given twice, so a row with that id is the line, and no row means it was forgotten.
+  A retry of a forgotten line gets its id and time back, with empty text and no
+  person or session. The time and task are compared too. That matters only for an
+  id that SQLite gave twice before migration 0007, or that a writer outside the node
+  let SQLite choose.
 
 `find_events` searches by words, `since`, and a room by name, newest first, with
 the id as tie-break. `since` with `nanosec` of a second or more is `INVALID`.
@@ -685,7 +688,7 @@ erDiagram
 | `map`                | A map the robot built, for example `arena-2026-10-19`                     | `frame_id` is the TF frame its coordinates are in, usually `map`. `map_hash`, `baseline_rev` and `clock_kind` identify it ([Map identity](#map-identity)). A map from before migration 0004 has a blank hash. |
 | `store_meta`         | The identity of the active run, in one row                                | `store_id`, `clock_kind` and `map_id`. `refresh_anchors_pending` is 1 until the first clock sample stamps a seed's anchors. A map named here cannot be deleted. The seed and restore tools write this row, and every node start gives it a new `store_id`. |
 | `session`            | One run of a task, for example one Receptionist attempt                   | At most one is open (`ended_at` NULL): the session the agent is in. Migration 0003's `session_one_open` index refuses a second. |
-| `last_id`            | The largest id ever given in `session`, in `person` and in `object`       | The node gives a new session or person the next id, so no id is given twice. Object ids are reserved from it in blocks ([Object ids and tombstones](#object-ids-and-tombstones)). Triggers keep it up to date. |
+| `last_id`            | The largest id ever given in `session`, `person`, `object` and `event`    | The node gives a new session, person or event the next id, so no id is given twice. Object ids are reserved from it in blocks ([Object ids and tombstones](#object-ids-and-tombstones)). Triggers keep it up to date. |
 | `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room. `name` is for display and `key` for requests ([Rooms, surfaces and relations](#rooms-surfaces-and-relations)). |
 | `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand). See [Object fields](#object-fields). |
 | `object_cloud`       | The merged point cloud of one object                                      | Its own table, so reading `object` never loads the points                      |
@@ -826,6 +829,12 @@ structure, and it cannot read its meaning.
 The trigger `session_forget_events` runs before the session row goes. A foreign key
 alone would set `person_id` to NULL and keep the text. Deleted lines also leave
 `event_fts`, but their words may remain in the file's free pages until a `VACUUM`.
+
+An event id is never given twice, also after a forget, a delete or a restart.
+Without `AUTOINCREMENT`, SQLite would give the next line the id of a deleted newest
+line. So `add_event` gives a new line the `event` counter in `last_id` plus one, as
+the node does for sessions and people (migration 0007). A retry relies on this: the
+row with its recorded id is its own line, and no other.
 
 ### Retried writes
 
@@ -1174,7 +1183,8 @@ The map ID is computed as `<arena>-<date>-<first 8 of the digest>`, never given.
   With `--id-floor N`, a new key gets an ID above N too, and the seed's object counter
   is at least N. N is the store's high-water mark, which the restore tool names when
   it refuses the seed ([Restore a stopped store](#restore-a-stopped-store)). The
-  default, 0, changes nothing, and the person and session counters are not touched.
+  default, 0, changes nothing, and the person, session and event counters are not
+  touched.
 - **`--replace` replaces only a seed.** A file with no `store_meta` row, or one with
   people or live objects in it, is refused. A seed of the same map also needs
   `--previous-seed`, so that its IDs are not lost.
@@ -1292,9 +1302,11 @@ pixi run db-restore --seed PATH --db PATH --map-folder PATH --clock-kind wall|ro
 store is the seed's rows with new run metadata. It is not a copy of the seed's bytes:
 
 - It has a fresh `store_id`.
-- It carries the larger of each `object`, `person` and `session` counter, from the
-  outgoing store and the seed. So an ID is never given twice in one store's lineage
-  ([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)).
+- It carries the larger of each `object`, `person`, `session` and `event` counter,
+  from the outgoing store and the seed. So an ID is never given twice in one store's
+  lineage ([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)). An outgoing
+  store from before migration 0007 has no `event` counter, so the largest event id
+  in its log or its ledger stands in for it.
 - It keeps every ID the outgoing store has given out. The larger counter protects
   only the IDs given after the restore, and the seed's own object IDs are copied as
   they are. So each object ID in the seed at or below the outgoing store's object

@@ -461,6 +461,9 @@ def add_event(
     belongs to a session can be named only with that session, so that forgetting
     it finds the event. The text must carry no personal details. Length and kind
     can be checked here, and the meaning of free text cannot (ADR-0022).
+
+    The id is one that no event has ever had, also after a delete or a restart
+    (migration 0007).
     """
     require_transaction(conn, "add_event")
     if kind not in EVENT_KINDS:
@@ -488,12 +491,22 @@ def add_event(
     x, y, yaw = pose if pose is not None else (None, None, None)
     with _integrity_as_refused():
         return conn.execute(
-            """INSERT INTO event (ts, kind, text, map_id, x, y, yaw, room_id, object_id,
+            """INSERT INTO event (id, ts, kind, text, map_id, x, y, yaw, room_id, object_id,
                                   person_id, session_id, task_id, cause)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (now, kind, text, map_id, x, y, yaw, room_id, object_id, person_id, session_id,
-             task_id, cause),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (_next_event_id(conn), now, kind, text, map_id, x, y, yaw, room_id, object_id,
+             person_id, session_id, task_id, cause),
         ).lastrowid
+
+
+def _next_event_id(conn: sqlite3.Connection) -> int | None:
+    """The id after the largest one any event has had.
+
+    A store before migration 0007 has no event counter. None then lets SQLite choose
+    the id, as it did at that schema.
+    """
+    row = conn.execute("SELECT id + 1 FROM last_id WHERE table_name = 'event'").fetchone()
+    return None if row is None else row[0]
 
 
 def _match_terms(text: str) -> str:
