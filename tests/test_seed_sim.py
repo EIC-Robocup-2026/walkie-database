@@ -177,6 +177,18 @@ def test_optional_anchors_and_catalogue_are_used(tmp_path, folder, output):
     conn.close()
 
 
+def test_the_id_floor_reaches_the_seed(tmp_path, folder, output):
+    anchors = write_yaml(tmp_path / "a.yaml", anchors_document(map_id_of(folder), anchors=[anchor()]))
+    argv = sim_argv(tmp_path, folder, output, extra=("--anchors", str(anchors), "--id-floor", "7"))
+
+    assert seed_sim.main(argv) == 0
+
+    conn = connect(output, readonly=True)
+    assert tuple(conn.execute("SELECT key, id FROM object").fetchone()) == ("table", 8)
+    assert conn.execute("SELECT id FROM last_id WHERE table_name = 'object'").fetchone()[0] == 8
+    conn.close()
+
+
 @pytest.mark.parametrize(
     "changes, message",
     [

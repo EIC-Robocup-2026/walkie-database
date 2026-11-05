@@ -32,6 +32,9 @@ We considered:
   node already has `use_sim_time`, and `use_sim_time` is what sets its clock.
 - **Compare only the map ID's 8 characters.** They name a directory. Two maps could
   share them.
+- **Renumber a seed's new anchors at restore time,** above the outgoing store's
+  counter. Workers that restore one seed onto different stores would then give the
+  same anchor different IDs, and the seed would no longer say what an anchor's ID is.
 
 **Decision**
 
@@ -48,14 +51,27 @@ We considered:
   and reviewed anchors, surfaces and catalogue rows. It has no L3 objects, people,
   sessions, conversations, events, histories or request ledger. Everything is checked
   before the output is created. A repeated key keeps its object ID, a removed key
-  becomes a tombstone, and a new key gets an ID above every ID used before. No
-  coordinate is invented, and no vector is synthesized.
+  becomes a tombstone, and a new key gets an ID above the previous seed's object
+  counter, and above `--id-floor N` when one is given. No coordinate is invented, and
+  no vector is synthesized.
 - **A restore keeps the lineage.** `restore` takes the lock, checks the seed and the
   outgoing store, and checkpoints the outgoing store's WAL before it reads its
   counters. It writes a temporary copy of the seed beside the target, with a fresh
   `store_id` and the larger of each counter, and syncs it. It then removes the old
   `-wal` and `-shm` and renames the copy over the target. A crash before the rename
   leaves the old store usable, and a crash after it leaves a complete new one.
+- **A restore never gives an issued ID to another object.** The larger counter
+  protects only later IDs, and the seed's own object IDs are copied as they are. A
+  seed built from an earlier seed cannot know which IDs a store restored from that
+  seed has given out since. So after it reads the outgoing counters, and before it
+  writes the copy, `restore` refuses a seed with an object ID at or below the outgoing
+  store's object high-water
+  mark, unless the store holds that ID with the same key. The message names the ID,
+  its key and the mark, and the two ways out: rebuild the seed with `--id-floor` set to
+  the mark, or restore to a new path, which starts a new lineage. Rows are never
+  renumbered at restore time, so every worker that restores one seed gets the same
+  anchor IDs. A seed holds no people or sessions, and room, surface and catalogue IDs
+  have no counter, so only object IDs are checked.
 - **Memory mode passes a gate first.** With `memory_enabled` true, `db_path`,
   `map_folder` and `map_id` are required and read-only. The store must exist, and
   its `store_meta` and map row must match the map ID, the **full** digest of the
@@ -84,6 +100,12 @@ We considered:
   ([ADR-0022](/architecture/decisions/0022-task-event-log.md)).
 - Restoring to one path per worker carries the counters across episodes. Restoring to
   a new path each time starts each lineage again from the seed's counters.
+- Restoring the same seed again works, because the store still holds each of its
+  anchors under the same ID and key. Nothing in the node removes or renames an anchor
+  today. A revised seed that adds an anchor is
+  refused on a store that has given out IDs since the earlier seed, until it is
+  rebuilt with `--id-floor`. Its new anchors then get IDs above every ID that store
+  has given out, so the IDs differ from those of a seed built without the floor.
 - A seed for a map whose baseline has since been chosen must be rebuilt, because the
   store's baseline must then equal the manifest's.
 - `flock` is reliable on a local disk only. Do not put a store on NFS.

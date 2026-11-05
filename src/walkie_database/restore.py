@@ -15,6 +15,15 @@ is not a copy of the seed's bytes:
 * It has no request ledger, because a seed has none. A retry from before the restore
   starts over.
 
+The larger counter protects only the IDs given after the restore. The seed's own
+object IDs are copied as they are, and a seed built from an earlier seed does not
+know which IDs a store has given out since. So an object ID in the seed at or below
+the outgoing store's high-water mark must be the same keyed object there, or the
+restore is refused. Rebuilding the seed with ``--id-floor`` set to that mark, or
+restoring to a new path, which starts a new lineage, are the ways out. A seed holds
+no people or sessions, so their IDs cannot clash. Room, surface and catalogue IDs
+have no counter and follow the seed.
+
 A crash before the replacement leaves the old store usable, and a crash after it
 leaves a complete new one. Only a store of the same map is ever replaced. A store
 with no map row, such as an old people-only file, stays as it is.
@@ -71,7 +80,47 @@ def check_seed(conn: sqlite3.Connection, path: Path, folder: MapFolder, clock_ki
     return row
 
 
-def _read_outgoing(db: Path, map_id: str, clock_kind: str) -> dict[str, int]:
+def _seed_objects(conn: sqlite3.Connection) -> list[tuple[int, str | None]]:
+    """The ID and key of every object in a seed, lowest ID first."""
+    return [(row["id"], row["key"]) for row in conn.execute("SELECT id, key FROM object ORDER BY id")]
+
+
+def _check_lineage(
+    conn: sqlite3.Connection,
+    db: Path,
+    seed: Path,
+    map_id: str,
+    seed_objects: Sequence[tuple[int, str | None]],
+    highwater: int,
+) -> None:
+    """Refuse a seed that would give an ID the outgoing store gave out to something else.
+
+    An ID at or below the store's high-water mark may already name an object, in the
+    store or in a client's trace of it. The seed may use one only for the same keyed
+    object of this map. A seed ID above the mark is new, and a stored anchor that the
+    seed leaves out was removed, so neither clashes.
+    """
+    for object_id, key in seed_objects:
+        if object_id > highwater:
+            return
+        held = conn.execute("SELECT map_id, label, key FROM object WHERE id = ?", (object_id,)).fetchone()
+        if key is not None and held is not None and (held["map_id"], held["key"]) == (map_id, key):
+            continue
+        if held is None:
+            there = f"the store gave out ID {object_id} and holds no object with it now"
+        else:
+            there = f"the store's ID {object_id} is {held['label']!r}"
+        raise Refused(
+            f"The seed {seed} gives the ID {object_id} to {key!r}, but {there}. The store {db} "
+            f"has given out object IDs up to {highwater}. Rebuild the seed with --id-floor "
+            f"{highwater}, so that its new anchors get IDs above that, or restore to a new path, "
+            "which starts a new lineage."
+        )
+
+
+def _read_outgoing(
+    db: Path, map_id: str, clock_kind: str, seed: Path, seed_objects: Sequence[tuple[int, str | None]]
+) -> dict[str, int]:
     """The counters of the store being replaced, or Refused when it must stay.
 
     The caller holds the lock, and has already moved any WAL into the main file,
@@ -91,7 +140,9 @@ def _read_outgoing(db: Path, map_id: str, clock_kind: str) -> dict[str, int]:
             raise Refused(f"The store {db} holds the map {meta['map_id']!r}, not {map_id!r}.")
         if meta["clock_kind"] != clock_kind:
             raise Refused(f"The store {db} runs on the clock {meta['clock_kind']!r}, not {clock_kind!r}.")
-        return _counters(conn)
+        counters = _counters(conn)
+        _check_lineage(conn, db, seed, map_id, seed_objects, counters["object"])
+        return counters
 
 
 @dataclass(frozen=True)
@@ -118,10 +169,11 @@ def restore(seed: str | Path, db: str | Path, map_folder: str | Path, clock_kind
         # Everything about the seed is checked first, because a lock file is a write.
         map_id = check_seed(seed_conn, seed_path, folder, clock_kind)["id"]
         counters = _counters(seed_conn)
+        seed_objects = _seed_objects(seed_conn)
         with StoreLock(target):
             if target.exists():
                 checkpoint_closed_store(target)
-                outgoing = _read_outgoing(target, map_id, clock_kind)
+                outgoing = _read_outgoing(target, map_id, clock_kind, seed_path, seed_objects)
                 counters = {name: max(counters[name], outgoing[name]) for name in COUNTERS}
             elif side_file(target, "-wal").exists():
                 raise Refused(f"{target}-wal exists with no store. Look at it, then remove it.")

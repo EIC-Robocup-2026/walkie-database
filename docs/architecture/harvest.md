@@ -95,8 +95,8 @@ needs its own locations file, which does not exist yet.
 
 `pixi run db-seed-sim` runs `walkie_database.seed_sim`. It takes all of those, plus
 `--clock-kind ros_sim` and `--output`, and optionally `--anchors`, `--catalogue`,
-`--previous-seed` and `--replace`. It prints the normalized rooms as JSON, and passes
-them to the same code as `db-seed-store`. It writes these rows:
+`--previous-seed`, `--id-floor` and `--replace`. It prints the normalized rooms as
+JSON, and passes them to the same code as `db-seed-store`. It writes these rows:
 
 | Table | Rows | Source |
 | ----- | ---- | ------ |
@@ -469,8 +469,8 @@ Tests in this repository:
 | Test | What it checks |
 | ---- | -------------- |
 | `tests/test_seed_sim.py` | One `room` row per room in the world file, with the display name, and the location's pose and description. No coordinate from the world's room pose, and no anchor from its furniture. That the printed rooms build the same seed through `seed_store`. That every bad input writes nothing, the blank-map locations included. |
-| `tests/test_seed_store.py` | That the same inputs give the same rows, that a reseed keeps anchor IDs and tombstones removed ones, that no L3 row or fake vector enters, and that an existing output is refused without `--replace`. |
-| `tests/test_restore.py` | A fresh `store_id`, the larger counters, the WAL of a killed node recovered first, a held lock refused, and a crash before the replacement leaving the old store usable. |
+| `tests/test_seed_store.py` | That the same inputs give the same rows, that a reseed keeps anchor IDs and tombstones removed ones, that `--id-floor` puts new anchors above it, that no L3 row or fake vector enters, and that an existing output is refused without `--replace`. |
+| `tests/test_restore.py` | A fresh `store_id`, the larger counters, the WAL of a killed node recovered first, a seed that would give an issued ID to another object refused, a held lock refused, and a crash before the replacement leaving the old store usable. |
 | `tests/test_map_gate.py` | A node started on a seed answers `find_objects`, with no objects. A wrong map, digest, baseline or clock stops the start. People times follow a fake `/clock`. |
 | `tests/test_store_lock.py` | That a second holder is refused, and that the kernel drops the lock of a killed holder. |
 

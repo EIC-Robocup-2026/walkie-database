@@ -1138,12 +1138,12 @@ refuses that file.
 ```bash
 pixi run db-seed-store --map-folder PATH --arena NAME --date YYYY-MM-DD \
     --rooms PATH --anchors PATH --catalogue PATH --clock-kind wall|ros_sim \
-    --output PATH [--previous-seed PATH] [--replace]
+    --output PATH [--previous-seed PATH] [--id-floor N] [--replace]
 
 pixi run db-seed-sim --map-folder PATH --arena NAME --date YYYY-MM-DD \
     --world-source PATH --locations PATH --room-names PATH \
     --clock-kind wall|ros_sim --output PATH \
-    [--anchors PATH] [--catalogue PATH] [--previous-seed PATH] [--replace]
+    [--anchors PATH] [--catalogue PATH] [--previous-seed PATH] [--id-floor N] [--replace]
 ```
 
 The map ID is computed as `<arena>-<date>-<first 8 of the digest>`, never given.
@@ -1155,8 +1155,14 @@ The map ID is computed as `<arena>-<date>-<first 8 of the digest>`, never given.
   are written in sorted order. Room IDs follow the sorted keys, so they can change
   between seeds. Only anchor IDs are stable.
 - **A reseed keeps its anchors' IDs.** With `--previous-seed`, a repeated key keeps
-  its ID and a removed key becomes a tombstone. A new key gets an ID above every ID
-  used before.
+  its ID and a removed key becomes a tombstone. A new key gets an ID above the
+  previous seed's object counter.
+- **`--id-floor N` keeps new IDs above a store's.** A previous seed does not know the
+  IDs that a store restored from it has given out since, such as a movable object's.
+  With `--id-floor N`, a new key gets an ID above N too, and the seed's object counter
+  is at least N. N is the store's high-water mark, which the restore tool names when
+  it refuses the seed ([Restore a stopped store](#restore-a-stopped-store)). The
+  default, 0, changes nothing, and the person and session counters are not touched.
 - **`--replace` replaces only a seed.** A file with no `store_meta` row, or one with
   people or live objects in it, is refused. A seed of the same map also needs
   `--previous-seed`, so that its IDs are not lost.
@@ -1277,21 +1283,36 @@ store is the seed's rows with new run metadata. It is not a copy of the seed's b
 - It carries the larger of each `object`, `person` and `session` counter, from the
   outgoing store and the seed. So an ID is never given twice in one store's lineage
   ([ADR-0020](decisions/0020-map-identity-and-seed-lineage.md)).
+- It keeps every ID the outgoing store has given out. The larger counter protects
+  only the IDs given after the restore, and the seed's own object IDs are copied as
+  they are. So each object ID in the seed at or below the outgoing store's object
+  high-water mark must be the same keyed object there: the same ID with the same key.
+  Otherwise the restore is refused, and the message names the ID, its key and the
+  mark. Rebuild the seed with `--id-floor` set to that mark, or restore to a new
+  path, which starts a new lineage. A seed ID above the mark is new, and an anchor
+  that the seed leaves out was removed, so neither is refused.
 - It has `refresh_anchors_pending` set, so the node stamps the anchors once.
 - It has no people, events or request ledger. A retry from before the restore starts
   over.
 
+Only object IDs need that check. A seed holds no people or sessions, so their IDs
+cannot clash. Room, surface and catalogue IDs have no counter: they follow the seed,
+and room IDs can change between seeds. A client names a room by its name, and an
+anchor or surface by its key.
+
 The order is what keeps it safe. The tool takes the lock, and checks the seed against
 the map folder and the clock. It checkpoints the outgoing store's WAL, because a
-killed node's last counters may be only there, and reads them. It writes a temporary
-copy beside the target and syncs it. Only then does it remove the old `-wal` and
-`-shm`, and rename the copy over the target. A crash before the rename leaves the old
-store usable, and a crash after it leaves a complete new one.
+killed node's last counters may be only there, and reads them. It checks the seed's
+object IDs against the outgoing store. It writes a temporary copy beside the target
+and syncs it. Only then does it remove the old `-wal` and `-shm`, and rename the copy
+over the target. A crash before the rename leaves the old store usable, and a crash
+after it leaves a complete new one.
 
 It refuses a held lock, a seed of another map or clock, a seed at an older schema, or
 a seed with anything a seed may not hold. The outgoing store stays as it is when it
-has another map or clock, when it is too new, when it has no `store_meta` row, or
-when it is not a database at all. A `-wal` with no store beside it is refused too.
+has another map or clock, when it is too new, when it has no `store_meta` row, when
+the seed would give one of its IDs to another object, or when it is not a database
+at all. A `-wal` with no store beside it is refused too.
 
 ### The map gate
 
