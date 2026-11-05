@@ -6,4 +6,4 @@ repositories:
   ros2_ws/src/walkie-vision:
     type: git
     url: https://github.com/EIC-Robocup-2026/walkie-vision.git
-    version: 60721b63733991e0f8a78b56c6fdf5987979ea02
+    version: be126f6b9e48c0cdec1b299864d583453fe28205
