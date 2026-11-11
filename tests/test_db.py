@@ -38,6 +38,35 @@ def test_transaction_rolls_back_on_error(db):
     assert not db.in_transaction
 
 
+def test_a_failed_commit_is_rolled_back_so_the_next_transaction_starts(db):
+    # A deferred foreign key is checked at COMMIT, and SQLite keeps the transaction
+    # open when that COMMIT fails. Left open, the next BEGIN IMMEDIATE would fail.
+    db.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+    db.execute("""CREATE TABLE child (id INTEGER PRIMARY KEY,
+                  parent_id INTEGER REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED)""")
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        with transaction(db):
+            db.execute("INSERT INTO child (id, parent_id) VALUES (1, 99)")
+    assert not db.in_transaction
+    assert db.execute("SELECT count(*) FROM child").fetchone()[0] == 0
+    with transaction(db):
+        db.execute("INSERT INTO parent (id) VALUES (99)")
+        db.execute("INSERT INTO child (id, parent_id) VALUES (1, 99)")
+    assert db.execute("SELECT count(*) FROM child").fetchone()[0] == 1
+
+
+def test_an_error_that_ended_the_transaction_is_raised_unchanged(db):
+    # SQLite ends the transaction itself on some errors, such as a full disk. A
+    # second ROLLBACK would fail and hide the error that matters.
+    with pytest.raises(RuntimeError, match="disk full"):
+        with transaction(db):
+            db.execute("INSERT INTO map (id, created_at) VALUES ('m1', 0)")
+            db.execute("ROLLBACK")
+            raise RuntimeError("disk full")
+    assert not db.in_transaction
+    assert db.execute("SELECT count(*) FROM map").fetchone()[0] == 0
+
+
 def test_transaction_removes_half_written_vec0_row(db):
     # vec0 rejects NULL metadata, but only after it has written part of the
     # row. Without the rollback, object_id 1 would stay taken.

@@ -55,11 +55,18 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
     Every write to a vec0 table belongs in one: when a vec0 insert fails, it
     can leave a half-written row behind, and only a rollback removes it.
+
+    A failed COMMIT is rolled back as well. SQLite keeps the transaction open
+    after some COMMIT errors (a deferred foreign key, SQLITE_BUSY), and an open
+    one would make the caller's next BEGIN fail. Other errors end the
+    transaction themselves (a full disk), so the rollback only runs while one
+    is open, and the original error is the one raised.
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
+        conn.execute("COMMIT")
     except BaseException:
-        conn.execute("ROLLBACK")
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
-    conn.execute("COMMIT")
