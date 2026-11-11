@@ -367,3 +367,66 @@ def test_a_seeded_anchor_takes_its_own_label_and_keeps_its_box():
     assert anchor.box == box and anchor.n_detections == 1 and anchor.last_seen == 5.0
     memory.maintain(now=7.0)
     assert anchor.box == box
+
+
+def half_out_chair():
+    """A chair pulled half out from under a table at (2, 0) that is 0.6 m deep."""
+    return blob((2.0, 0.4, 0.45), (0.4, 0.4, 0.9), count=3000)
+
+
+def seeded(label, center, size, object_id=3):
+    return Track(key=object_id, layer=ANCHOR, points=np.zeros((0, 3)), labels={label: 1}, first_seen=0.0,
+                 last_seen=0.0, object_id=object_id, fixed=True, box=Box(center, size), dirty=False,
+                 needs_cleanup=False)
+
+
+def test_a_seeded_anchor_absorbs_an_anchor_track_inside_its_box_and_keeps_its_name():
+    sofa = seeded("sofa", (3.17, -1.65, 0.42), (0.58, 1.88, 0.84))
+    memory = ObjectMemory(tracks=[sofa])
+    for stamp in (1.0, 2.0, 3.0):
+        strip = blob((3.12, -1.68, 0.66), (0.3, 1.6, 0.38), count=1500, seed=int(stamp))
+        memory.add([seen(strip, label="table", stamp=stamp)])
+    assert len(memory.tracks) == 2  # another name never joins a seeded anchor as it is seen
+    memory.maintain(now=4.0)
+    assert len(memory.tracks) == 1 and memory.tracks[0] is sofa
+    assert sofa.label == "sofa" and sofa.labels == {"sofa": 4}
+    assert sofa.n_detections == 3 and sofa.n_views == 3 and sofa.last_seen == 3.0
+    assert sofa.box == Box((3.17, -1.65, 0.42), (0.58, 1.88, 0.84))
+
+
+def test_a_seeded_anchor_leaves_an_anchor_track_that_reaches_well_outside_its_box():
+    table = seeded("table", (2.0, 0.0, 0.4), (1.0, 0.6, 0.8))
+    memory = ObjectMemory(tracks=[table])
+    memory.add([seen(half_out_chair(), label="chair", stamp=1.0)])
+    memory.maintain(now=2.0)
+    assert len(memory.tracks) == 2 and table.labels == {"table": 1}
+    assert len(memory.tracks[1].points) > 1000  # the chair kept its cloud through the cleanup
+
+
+def test_containment_needs_a_seeded_anchor_and_never_takes_a_movable_object():
+    table = seeded("table", (2.0, 0.0, 0.4), (1.0, 0.6, 0.8))
+    cup = blob((2.0, 0.0, 0.7), (0.08, 0.08, 0.1))
+    with_seed = ObjectMemory(tracks=[table])
+    with_seed.add([seen(cup, label="cup", stamp=1.0)])
+    with_seed.maintain(now=2.0)
+    assert len(with_seed.tracks) == 2
+
+    # The same tracks made by the memory: a measured box is not trusted to own its space.
+    big = Track(key=1, layer=ANCHOR, points=voxel_downsample(blob((2.0, 0.0, 0.4), (1.0, 0.6, 0.8), 6000), 0.025),
+                labels={"sofa": 5}, first_seen=0.0, last_seen=0.0, n_detections=5, n_views=5)
+    strip = Track(key=2, layer=ANCHOR, points=voxel_downsample(blob((2.0, 0.0, 0.6), (0.3, 0.5, 0.3), 1500), 0.025),
+                  labels={"table": 3}, first_seen=0.0, last_seen=0.0, n_detections=3, n_views=3)
+    without_seed = ObjectMemory(tracks=[strip, big])
+    without_seed.maintain(now=1.0)
+    assert len(without_seed.tracks) == 2
+
+
+def test_a_lower_containment_takes_more_of_a_track_reaching_outside():
+    def chair_count(containment):
+        table = seeded("table", (2.0, 0.0, 0.4), (1.0, 0.6, 0.8))
+        memory = ObjectMemory(MergeConfig(seed_containment=containment), tracks=[table])
+        memory.add([seen(half_out_chair(), label="chair", stamp=1.0)])
+        memory.maintain(now=2.0)
+        return len(memory.tracks)
+
+    assert (chair_count(0.8), chair_count(0.3)) == (2, 1)

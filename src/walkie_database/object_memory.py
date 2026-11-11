@@ -34,7 +34,9 @@ Upkeep (``ObjectMemory.maintain``)
     detection never reaches it.
 
 A seeded anchor is a fixed track: it has a box and no points. A detection of its
-label that falls in its box confirms it, and changes no geometry.
+label that falls in its box confirms it, and changes no geometry. An anchor track
+that lies mostly inside its box is merged into it at upkeep, whatever its label,
+and the seeded anchor keeps its own.
 
 See docs/architecture/object-memory.md, ADR-0025 (matching without embeddings) and
 ADR-0026 (top surfaces and ``on`` relations).
@@ -83,6 +85,11 @@ class MergeConfig:
     # match_distance of other furniture (stools at a table), so overlap alone would
     # join them.
     other_label_similarity: float = 0.5
+    # The share of an anchor track's points inside a seeded anchor's box (grown by
+    # match_distance) that makes it the seeded anchor, whatever its name. Furniture
+    # does not share its space, so the detector has named part of the seeded anchor
+    # otherwise: a strip of a sofa a table, the top of a table a chair.
+    seed_containment: float = 0.8
     surface_bin: float = 0.02  # metres, the height bins that find an anchor's top surface
     surface_min_share: float = 0.3  # of the fullest bin's points, for a bin to be a surface
     anchor_labels: tuple[str, ...] = DEFAULT_ANCHOR_LABELS
@@ -551,6 +558,8 @@ class ObjectMemory:
             return False
         if not _boxes_touch(a.bounds(), b.bounds(), self.config.match_distance):
             return False
+        if a.layer == ANCHOR and (a.fixed or b.fixed) and self._inside_seeded(a, b):
+            return True
         if a.layer == ANCHOR:
             same_label = a.label == b.label
         else:
@@ -572,6 +581,18 @@ class ObjectMemory:
         # to make up for another name.
         return same_label or spatial + self._other_label(a.layer) >= self.config.match_threshold
 
+    def _inside_seeded(self, a: Track, b: Track) -> bool:
+        """Whether one of two anchor tracks is seeded and holds most of the other's points.
+
+        Only a seeded anchor's box is trusted for this. A box the memory measured
+        can be wrong, as when a sofa and a coffee table merge into one.
+        """
+        fixed, other = (a, b) if a.fixed else (b, a)
+        if fixed.box is None or len(other.points) == 0:
+            return False
+        share = float(fixed.box.contains(other.points, self.config.match_distance).mean())
+        return share >= self.config.seed_containment
+
     @staticmethod
     def _winner(a: Track, b: Track) -> tuple[Track, Track]:
         """The track that keeps its id: a seeded anchor, then a stored one, then the most seen."""
@@ -583,7 +604,11 @@ class ObjectMemory:
     def _absorb(self, winner: Track, loser: Track) -> None:
         if not winner.fixed:
             winner.set_points(self._capped(voxel_downsample(np.vstack((winner.points, loser.points)), self.config.voxel_size)))
+        # A seeded anchor keeps its seeded name: a track it absorbs under another
+        # name counts as more sightings of it.
+        own = winner.label if winner.fixed else None
         for name, count in loser.labels.items():
+            name = own or name
             winner.labels[name] = winner.labels.get(name, 0) + count
         winner.n_detections += loser.n_detections
         # An array that showed both tracks is one view of the merged object. Arrays

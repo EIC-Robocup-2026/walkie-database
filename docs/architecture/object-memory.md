@@ -32,6 +32,9 @@ To run it on the simulation, follow
 - **Furniture gets a top surface**, measured from its points, and an object resting
   on it gets an `on` relation
   ([ADR-0026](decisions/0026-anchor-surfaces-and-on-relations.md)).
+- **A seeded anchor owns its box.** Furniture the detector finds mostly inside it is
+  that anchor under another name, and merges into it
+  ([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)).
 - **Confirmed objects go out as markers and a cloud**, transient local, in the map
   frame ([ADR-0013](decisions/0013-publish-boxes-to-rviz-and-moveit.md)).
 - **A recording replays offline** through the same code, to tune and score it
@@ -220,7 +223,9 @@ answers only to its main label, the one given most often, so a sofa once called
   and colour shares, kept until the next save writes them to `object_observation`.
 
 A seeded anchor is a fixed track: it has a box and no points. A detection with its
-label inside its box joins it and changes only its counts and times.
+label inside its box joins it and changes only its counts and times. A detection
+with another label makes a track of its own, which the next upkeep merges into the
+seeded anchor when it lies mostly inside its box (step 5).
 
 ### 5. Upkeep
 
@@ -241,8 +246,12 @@ Every `merge_period_s` (2 s), the node runs one round:
 5. **Duplicates.** Two tracks of one layer that overlap by at least half are one
    object when their vectors are alike (cosine 0.8 or more). Without vectors, they
    must share a label (for anchors, the same main label), or be movable objects
-   that overlap by at least 60%. The track that keeps its id is a seeded anchor,
-   then a stored track, then the one seen most. Two seeded anchors never merge.
+   that overlap by at least 60%. An anchor track with at least 80% of its points
+   in a seeded anchor's box, grown by `match_distance`, is that anchor, whatever
+   its label (`seed_containment`). The track that keeps its id is a seeded anchor,
+   then a stored track, then the one seen most. A seeded anchor keeps its own
+   label, and counts what it absorbs under that label. Two seeded anchors never
+   merge.
    The merged track is denoised, boxed and measured again at once, so the save
    that follows writes geometry that matches its cloud.
 
@@ -409,12 +418,16 @@ explains the output.
 - **The detector's labels set the layers.** A partition wall called a chair becomes
   an anchor, and a sofa called a table merges with the coffee table next to it.
   Asking vision for `wall`, `partition` and `door`, which the memory drops, avoids
-  the first.
+  the first. Seeding the furniture avoids the second
+  ([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)).
 - **Localization error becomes merging error.** Two objects closer than
   `match_distance` with a shared label can merge, and an object seen from two poses
   that disagree by more than it can split.
 - **Seeded anchors keep their seeded geometry**, even when the camera sees them
   elsewhere.
+- **A seeded anchor takes in furniture that stands inside its box.** A chair pushed
+  under a seeded table, with 80% of its points inside the table's box, merges into
+  the table unless the chair is seeded too.
 - **An array is known by its stamp.** Two arrays with one stamp count as one view.
   One detection topic never repeats a stamp, but a restarted simulation starts its
   clock again, so restore the store before each simulated run, as the demo does.
@@ -446,3 +459,7 @@ explains the output.
 ??? note "ADR-0027: Tune the object memory by replaying a recording offline, through the node's own code · Proposed"
 
     --8<-- "architecture/decisions/0027-replay-a-recording-offline.md:body"
+
+??? note "ADR-0028: A seeded anchor owns its box, whatever the detector calls what is inside · Proposed"
+
+    --8<-- "architecture/decisions/0028-seeded-anchors-own-their-box.md:body"
