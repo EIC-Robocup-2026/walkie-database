@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replay a recorded detection topic through the object memory offline, and score it.
 
-    pixi run memory-replay <bag folder> [--truth TRUTH.json] [--set NAME=VALUE ...]
+    pixi run memory-replay <bag folder> [--seed SEED.db] [--truth TRUTH.json] [--set NAME=VALUE ...]
 
 The bag needs the detection topic, /tf, /tf_static and /clock. The tool reads it in
 order and does what the node does in memory mode, without ROS discovery or timing:
@@ -17,6 +17,10 @@ order and does what the node does in memory mode, without ROS discovery or timin
 The node can drop arrays when it falls behind (its subscription keeps one), and this
 tool never does, so its result is the best the node could reach on the recording.
 
+``--seed`` starts from a copy of a seed store, such as one from ``db-seed-sim
+--scene``, with its anchors loaded as the node loads them after ``db-restore``. The
+seed itself is only read. Without it, the scratch store starts empty.
+
 ``--set`` overrides a ``MergeConfig`` field, for example ``--set match_distance=0.1``
 or ``--set anchor_labels=table,shelf``. ``--truth`` scores the confirmed objects
 against a JSON file of known boxes in the map frame, made by hand for each world
@@ -29,6 +33,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import sqlite3
 import struct
 import sys
 import tempfile
@@ -51,7 +56,7 @@ from walkie_database.migrate import migrate  # noqa: E402
 from walkie_database.object_context import Rejected  # noqa: E402
 from walkie_database.object_intake import map_detections  # noqa: E402
 from walkie_database.object_memory import ANCHOR, MOVABLE, Maintenance, MapDetection, MergeConfig, ObjectMemory  # noqa: E402
-from walkie_database.object_memory_store import save  # noqa: E402
+from walkie_database.object_memory_store import load_relations, load_tracks, save  # noqa: E402
 from walkie_database.objects import OBJECT  # noqa: E402
 from walkie_database.people import vector_tables  # noqa: E402
 
@@ -168,23 +173,44 @@ class Run:
     saves: int
 
 
-def run(intake: Intake, config: MergeConfig) -> Run:
-    """Merge the steps with one configuration, saving into a scratch store as the node does."""
-    memory = ObjectMemory(config)
-    maintenance = Maintenance()
-    relations: dict[int, int] = {}
-    saves = 0
-    with tempfile.TemporaryDirectory() as scratch:
-        conn = connect(Path(scratch) / "replay.db")
+def _scratch_store(path: Path, seed: str | None) -> tuple[sqlite3.Connection, str]:
+    """A scratch store at *path* and its map id: empty, or a copy of the store *seed*."""
+    conn = connect(path)
+    if seed is None:
         migrate(conn)
         with transaction(conn):
             conn.execute("INSERT INTO map (id, created_at) VALUES (?, 0)", (REPLAY_MAP,))
+        return conn, REPLAY_MAP
+    if not Path(seed).is_file():
+        raise SystemExit(f"The seed {seed} is not a file.")
+    source = connect(seed, readonly=True)
+    source.backup(conn)  # reads through the WAL, and never writes to the seed
+    source.close()
+    migrate(conn)
+    maps = [row[0] for row in conn.execute("SELECT id FROM map")]
+    if len(maps) != 1:
+        raise SystemExit(f"The seed {seed} holds {len(maps)} maps, not one.")
+    return conn, maps[0]
+
+
+def run(intake: Intake, config: MergeConfig, seed: str | None = None) -> Run:
+    """Merge the steps with one configuration, saving into a scratch store as the node does.
+
+    With *seed*, the scratch store starts as a copy of that store, and the memory
+    starts from its live objects, as the node does after ``db-restore``.
+    """
+    maintenance = Maintenance()
+    saves = 0
+    with tempfile.TemporaryDirectory() as scratch:
+        conn, map_id = _scratch_store(Path(scratch) / "replay.db", seed)
+        memory = ObjectMemory(config, load_tracks(conn, map_id, config))
+        relations = load_relations(conn, map_id)
         for step in intake.steps:
             if step.detections is not None:
                 memory.add(step.detections)
                 continue
             maintenance.merged.extend(memory.maintain(step.now).merged)
-            saved = save(conn, memory, maintenance, map_id=REPLAY_MAP)
+            saved = save(conn, memory, maintenance, map_id=map_id)
             if saved.inserted or saved.updated or saved.merged:
                 relations = {src: dst for src, (dst, _) in saved.relations.items()}
                 saves += 1
@@ -315,6 +341,7 @@ def main() -> None:
     parser.add_argument("--map-frame", default="map")
     parser.add_argument("--merge-period", type=float, default=2.0, help="seconds of /clock between upkeep rounds")
     parser.add_argument("--set", action="append", default=[], metavar="NAME=VALUE", help="override a MergeConfig field")
+    parser.add_argument("--seed", help="a seed store to start from, as the node does after db-restore")
     parser.add_argument("--truth", help="a JSON file of known boxes to score against")
     parser.add_argument("--object-radius", type=float, default=0.15,
                         help="metres from a known object's centre, seen from above, that a track may stand for it")
@@ -325,8 +352,9 @@ def main() -> None:
 
     config = dataclasses.replace(MergeConfig(), **parse_overrides(args.set))
     intake = read_intake(args.bag, topic=args.topic, map_frame=args.map_frame, merge_period=args.merge_period)
-    result = run(intake, config)
+    result = run(intake, config, args.seed)
     summary = {
+        "seed": args.seed,
         "arrays": intake.arrays, "rejected": intake.rejected, "tf_misses": intake.tf_misses,
         "detections": intake.detections, "with_embedding": intake.with_embedding,
         "confirmed": len(result.memory.confirmed()), "relations": len(result.relations),

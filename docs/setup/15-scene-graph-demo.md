@@ -148,14 +148,16 @@ Then replay the recording through the object memory as often as you like. It nee
 no ROS graph and no node, and writes only a scratch store in a temporary folder:
 
 ```bash
-pixi run memory-replay chula-drive-01 --truth tools/truth/chula_pat14_6.json
-pixi run memory-replay chula-drive-01 --truth tools/truth/chula_pat14_6.json \
+pixi run memory-replay chula-drive-01 --seed /tmp/chula/seed.db --truth tools/truth/chula_pat14_6.json
+pixi run memory-replay chula-drive-01 --seed /tmp/chula/seed.db --truth tools/truth/chula_pat14_6.json \
     --set match_distance=0.15 --set confirm_views=2 --json /tmp/replay.json
 ```
 
-`--set NAME=VALUE` overrides any `MergeConfig` field. `--json` writes the summary,
-the settings and every track. One run of the 2600 arrays of `chula-drive-01` takes
-60 to 80 s. The summary it prints:
+`--seed` starts from a copy of the step 1 seed, with its anchors loaded as the node
+loads them after `db-restore`. The seed itself is only read. Without `--seed`, the
+replay starts from an empty store. `--set NAME=VALUE` overrides any `MergeConfig`
+field. `--json` writes the summary, the settings and every track. One run of the 2600
+arrays of `chula-drive-01` takes 60 to 80 s. The summary it prints:
 
 | Key | What it counts |
 | --- | -------------- |
@@ -177,9 +179,16 @@ the settings and every track. One run of the 2600 arrays of `chula-drive-01` tak
     object should rest on the furniture whose outline holds its centre and whose
     top is 2 cm above to 5 cm below its bottom.
 
-With the defaults, `chula-drive-01` gives 10 of 12 objects at 1.0 track each, 9 of 9
-pieces of furniture at 1.22 anchors each, and 7 right `on` relations out of 8, with
-none wrong. The two objects missed are on the shelf's inner level and on the bar.
+With the defaults and the step 1 seed, `chula-drive-01` gives 10 of 12 objects at 1.0
+track each, 9 of 9 pieces of furniture at 1.0 anchor each, and 8 right `on` relations
+out of 8. It states 12 `on` relations: the other 4 rest on the shelf's levels below
+its top, which the truth file does not score. The two objects missed are on the
+shelf's inner level and on the bar.
+
+Without `--seed`, the furniture splits into 1.22 anchors each and 7 of the 8 `on`
+relations are right, with none wrong. The sofa and the coffee table merge into one
+anchor, a strip of the sofa becomes an anchor of its own called a table, and the mug
+on the coffee table gets no `on` relation.
 
 To score another world, write its own truth file: a JSON object of named boxes, each
 with `kind` (`furniture` or `object`), `min` and `max` in the map frame.
@@ -188,7 +197,8 @@ with `kind` (`furniture` or `object`), `min` and `max` in the map frame.
 
 ```bash
 pixi run test tests/test_object_memory.py tests/test_object_memory_store.py \
-    tests/test_object_memory_node.py tests/test_object_markers.py tests/test_node_shutdown.py
+    tests/test_object_memory_node.py tests/test_object_markers.py tests/test_node_shutdown.py \
+    tests/test_replay_memory.py
 ```
 
 | File | What it checks |
@@ -198,6 +208,7 @@ pixi run test tests/test_object_memory.py tests/test_object_memory_store.py \
 | `tests/test_object_memory_node.py` | Arrays to a stored object that `search_objects` finds, a missing transform, one view not being enough, markers and cloud for a late subscriber, and a restarted node |
 | `tests/test_object_markers.py` | The `on` line ends on the anchor's surface, and a relation to an object that is not shown draws nothing |
 | `tests/test_node_shutdown.py` | A second Ctrl-C does not cut the last save short, and Ctrl-C exits 0 when rclpy is already shut down |
+| `tests/test_replay_memory.py` | The replay starts from a seed's anchors as the node does, a table-named strip of a seeded sofa merges into it, and the seed is only read |
 
 `tests/test_node_shutdown.py` runs the node in its own process with
 `tests/shutdown_harness.py`, and sends SIGINT to its process group, as a terminal

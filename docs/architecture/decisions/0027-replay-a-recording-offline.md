@@ -27,16 +27,18 @@ with `rosbag2_py` and runs the node's steps, in one process with no ROS graph:
 5. After every merge period of `/clock`, it runs `maintain` and
    `object_memory_store.save` into a scratch store, as the node's timer does.
 
-`--set NAME=VALUE` overrides a `MergeConfig` field. `--truth` scores the
-confirmed objects against a JSON file of known boxes in the map frame.
-`--json` writes the summary and every track.
+`--set NAME=VALUE` overrides a `MergeConfig` field. `--seed` starts from a copy
+of a seed store, with its anchors loaded as the node loads them after
+`db-restore`. `--truth` scores the confirmed objects against a JSON file of
+known boxes in the map frame. `--json` writes the summary and every track.
 
 **Consequences**
 
 - One run of the 2600 arrays of `chula-drive-01` takes 60 to 80 s, about 18 s of
   it reading the bag. A sweep runs several settings in parallel processes.
 - No ROS graph, node or real store is touched. The tool writes only a scratch
-  store in a temporary folder, and the `--json` file.
+  store in a temporary folder, and the `--json` file. A `--seed` store is only
+  read.
 - The result is the best the node could do on that recording. The node's
   subscription keeps one array and can drop arrays when it falls behind, and the
   tool never drops one. On the drive, the live node and the replay agreed: 41
