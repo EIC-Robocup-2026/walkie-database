@@ -275,10 +275,12 @@ is logged, and is tried again next round, with the tracks unchanged.
 **Views.** The views of an object are the arrays its stored sightings hold, and
 those of every object merged into it, plus the new arrays the store does not hold
 yet. So an array two merged objects both saw counts once, and memory keeps only the
-stamps since the last save. A save adds one indexed lookup per new array to the
-stored count. The first save of a track in a process, and the first after it
-absorbed a stored object, count the stored sightings again, which also corrects a
-count an older build stored.
+stamps since the last save. A save starts from the stored count, finds the
+objects merged into the object, and looks each new array up in their sightings
+with the `(object_id, ts)` index, so it does not read the history. The first save
+of a track in a process, and the first after it absorbed a stored object, count
+the stored sightings instead, which takes longer the longer the history; that count
+also corrects one an older build stored.
 
 The ids are reserved before the transaction, in their own committed one, so a crash
 or a failed save can leave gaps but never gives an id twice

@@ -205,9 +205,10 @@ def _count_views(conn: sqlite3.Connection, track: Track, object_id: int) -> int:
     Its observations are its own and those of every object merged into it, and an
     array is known by its stamp. Called before the track's sightings are written, so
     a new array adds one unless the store already holds its stamp. Once a save has
-    counted a track, the next ones start from the stored count, so a save costs one
-    indexed lookup per new array. The first save in a process, and the first after
-    the track absorbed a stored object, count the stored observations again.
+    counted a track, the next ones start from the stored count: one query per new
+    array, which probes the (object_id, ts) index once per object in the family. The
+    first save in a process, and the first after the track absorbed a stored object,
+    count the stored observations again, which reads the family's whole history.
     """
     family = [row[0] for row in conn.execute(
         """WITH RECURSIVE family (id) AS (
