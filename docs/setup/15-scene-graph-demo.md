@@ -71,7 +71,7 @@ pixi run db-seed-sim --map-folder $W/map --arena chula --date 2026-11-12 --clock
     --scene $W/scene.xml --furniture tools/furniture/chula_pat14_6.yaml \
     --output /tmp/chula/seed.db
 pixi run db-restore --seed /tmp/chula/seed.db --db /tmp/chula/walkie.db \
-    --map-folder $W/map --clock-kind ros_sim
+    --map-folder $W/map --clock-kind ros_sim --replace
 ```
 
 The seed holds the two rooms and the world's nine pieces of furniture, as anchors
