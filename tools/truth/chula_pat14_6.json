@@ -1,0 +1,23 @@
+{
+ "sofa": {"kind": "furniture", "min": [2.88, -2.59, 0.0], "max": [3.46, -0.71, 0.83]},
+ "tv_desk": {"kind": "furniture", "min": [0.88, -2.49, 0.0], "max": [1.25, -0.81, 1.25]},
+ "coffee_table": {"kind": "furniture", "min": [2.56, -2.24, 0.0], "max": [2.87, -1.10, 0.42]},
+ "kitchen_table": {"kind": "furniture", "min": [0.62, -5.79, 0.0], "max": [2.27, -4.89, 0.75]},
+ "bar": {"kind": "furniture", "min": [-0.29, -7.54, 0.0], "max": [0.75, -6.96, 0.75]},
+ "shelf": {"kind": "furniture", "min": [1.75, -7.58, 0.0], "max": [3.03, -7.11, 1.82]},
+ "stool_1": {"kind": "furniture", "min": [0.80, -4.68, 0.0], "max": [1.10, -4.38, 0.49]},
+ "stool_2": {"kind": "furniture", "min": [1.75, -4.68, 0.0], "max": [2.06, -4.38, 0.49]},
+ "stool_3": {"kind": "furniture", "min": [1.29, -6.21, 0.0], "max": [1.60, -5.91, 0.49]},
+ "red_plate_1": {"kind": "object", "min": [0.82, -5.21, 0.75], "max": [1.04, -4.99, 0.77]},
+ "apple_1": {"kind": "object", "min": [1.23, -5.16, 0.75], "max": [1.31, -5.08, 0.83]},
+ "pringles_can_1": {"kind": "object", "min": [1.61, -5.16, 0.75], "max": [1.69, -5.08, 0.98]},
+ "chips_bag_1": {"kind": "object", "min": [1.91, -5.51, 0.75], "max": [2.05, -5.47, 0.95]},
+ "water_bottle_1": {"kind": "object", "min": [0.91, -5.60, 0.75], "max": [0.97, -5.54, 0.97]},
+ "mug_1": {"kind": "object", "min": [1.39, -5.60, 0.75], "max": [1.50, -5.52, 0.85]},
+ "apple_2": {"kind": "object", "min": [2.02, -7.33, 0.92], "max": [2.10, -7.25, 1.00]},
+ "pringles_can_2": {"kind": "object", "min": [2.36, -7.33, 1.32], "max": [2.44, -7.25, 1.55]},
+ "chips_bag_2": {"kind": "object", "min": [2.65, -7.31, 0.52], "max": [2.79, -7.27, 0.72]},
+ "red_plate_2": {"kind": "object", "min": [0.06, -7.30, 0.75], "max": [0.28, -7.08, 0.77]},
+ "water_bottle_2": {"kind": "object", "min": [0.52, -7.21, 0.75], "max": [0.58, -7.15, 0.97]},
+ "mug_2": {"kind": "object", "min": [2.67, -1.84, 0.42], "max": [2.79, -1.76, 0.52]}
+}

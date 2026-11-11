@@ -132,6 +132,12 @@ description = "Build a store's seed from a sim world's authoring file and a loca
 cmd = "python -m walkie_database.restore"
 description = "Reset a stopped store to a seed, keeping its ID lineage"
 
+# Offline: no ROS graph, no node and no store of yours is touched. It writes only
+# a scratch store in a temporary folder, and --json when given.
+[tasks.memory-replay]
+cmd = "python tools/replay_memory.py"
+description = "Replay a recorded detection topic through the object memory and score it (append the bag folder)"
+
 # -readonly so a look around cannot change the file while the node runs.
 # The .load line adds sqlite-vec, without which vec0 tables cannot be read.
 [tasks.db-shell]
