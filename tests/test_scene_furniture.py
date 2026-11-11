@@ -167,6 +167,38 @@ def test_separate_boards_at_one_height_are_refused():
         measure(scene)
 
 
+def test_boards_that_touch_in_an_l_are_refused_not_filled_in():
+    # Their bounds would claim the empty corner (6.2, 2.2) as surface.
+    scene = SCENE.replace(
+        '<geom name="board_3" type="box" pos="0 0 1.0" size="0.4 0.2 0.01"/>',
+        '<geom name="board_3" type="box" pos="0 -0.1 1.0" size="0.4 0.1 0.01"/>'
+        '<geom name="board_4" type="box" pos="-0.3 0.2 1.0" size="0.1 0.2 0.01"/>',
+    )
+    with pytest.raises(Refused, match="shelf has 2 separate boards at 1.01 m"):
+        measure(scene)
+
+
+def test_a_board_inside_another_at_one_height_adds_nothing():
+    scene = SCENE.replace(
+        '<geom name="board_3" type="box" pos="0 0 1.0" size="0.4 0.2 0.01"/>',
+        '<geom name="board_3" type="box" pos="0 0 1.0" size="0.4 0.2 0.01"/>'
+        '<geom name="board_4" type="box" pos="0.1 0 1.0" size="0.15 0.15 0.01"/>',
+    )
+    top = by_key(measure(scene))["shelf"]["surfaces"][-1]
+    assert (top["key"], top["outline"]) == ("shelf_top", square(5.6, 1.8, 6.4, 2.2))
+
+
+@pytest.mark.parametrize("shift, joined", [(0.004, True), (0.03, False)])
+def test_boards_join_only_when_their_edges_line_up(shift, joined):
+    scene = SCENE.replace('name="cushion_b" type="box" pos="0 0 0.4"', f'name="cushion_b" type="box" pos="{shift} 0 0.4"')
+    if joined:
+        (seat,) = by_key(measure(scene))["sofa"]["surfaces"]
+        assert seat["outline"] == square(1.75, 1.35, round(2.25 + shift, 4), 2.65)
+    else:
+        with pytest.raises(Refused, match="sofa has 3 separate boards at 0.45 m"):
+            measure(scene)
+
+
 def test_a_centre_in_two_rooms_is_refused():
     rooms = [*ROOMS, {"key": "hall", "polygon": [[0.0, 0.0], [9.0, 0.0], [9.0, 4.0], [0.0, 4.0]]}]
     with pytest.raises(Refused, match="sofa .* is in living_room and hall"):

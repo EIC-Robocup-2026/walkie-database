@@ -153,9 +153,11 @@ furniture:
   skipped.
 - **Surfaces:** the top of each board, a collision geom at most 0.12 m thick with a
   footprint of at least 0.05 m². Boards at one height less than 0.05 m apart are one
-  surface, as the sofa's three seat cushions are. The highest is `<key>_top`, the
-  lower ones `<key>_level_<n>`, counted up from the floor. The shelf gets
-  `shelf_level_1` to `shelf_level_4` and `shelf_top`.
+  surface when one lies inside the other or their edges line up across the gap
+  (within 5 mm), as the sofa's three seat cushions do. Boards in an L or a step are
+  refused, since their bounds would claim empty space as surface. The highest is
+  `<key>_top`, the lower ones `<key>_level_<n>`, counted up from the floor. The shelf
+  gets `shelf_level_1` to `shelf_level_4` and `shelf_top`.
 - **Room:** the room whose outline holds the box's centre.
 
 It reads only box and cylinder geoms, on unrotated bodies directly in the

@@ -14,9 +14,11 @@ Each body gives one anchor, in the room whose outline holds its centre:
   are both 0, directly or through its default class, only draws, and is skipped.
 * Each surface is the top of a board: a collision geom at most 0.12 m thick whose
   footprint is at least 0.05 m^2. Boards at one height less than 0.05 m apart are
-  one surface, as the seat cushions of a sofa are. The highest surface is
-  ``<key>_top`` and the lower ones ``<key>_level_<n>``, counted up from the floor.
-  A cylinder's outline is the square around it.
+  one surface when one lies inside the other or their edges line up across the gap
+  (within 5 mm), as the seat cushions of a sofa do. Boards in an L or a step stay
+  separate, and are refused, since their bounds would claim empty space as surface.
+  The highest surface is ``<key>_top`` and the lower ones ``<key>_level_<n>``,
+  counted up from the floor. A cylinder's outline is the square around it.
 
 Only box and cylinder geoms are read, on unrotated bodies directly in the
 worldbody, with no joints, child bodies or frames. Anything else is refused,
@@ -36,7 +38,8 @@ from walkie_database.seed_store import SCHEMA_VERSION, _contains, _items, _key, 
 
 MAX_BOARD_THICKNESS = 0.12  # metres
 MIN_BOARD_AREA = 0.05  # square metres
-BOARD_GAP = 0.05  # metres; boards at one height closer than this are one surface
+BOARD_GAP = 0.05  # metres; boards at one height closer than this, and lined up, are one surface
+EDGE_TOLERANCE = 0.005  # metres; how closely the edges of boards to be joined must line up
 _ROTATIONS = ("euler", "axisangle", "xyaxes", "zaxis")
 _BODY_CHILDREN = ("geom", "inertial", "site", "camera", "light")
 
@@ -139,18 +142,33 @@ def _body_geoms(body: ET.Element, defaults: _Defaults) -> list[_Geom]:
     return geoms
 
 
+def _joinable(a: Sequence[float], b: Sequence[float]) -> bool:
+    """True when two rectangles' bounds cover only the two and the gap between them.
+
+    That holds when they are less than BOARD_GAP apart and either one lies inside the
+    other or they share their extent along one axis, within EDGE_TOLERANCE. An L or a
+    step is not joinable: its bounds would claim empty space as surface.
+    """
+    near = (a[0] < b[2] + BOARD_GAP and b[0] < a[2] + BOARD_GAP
+            and a[1] < b[3] + BOARD_GAP and b[1] < a[3] + BOARD_GAP)
+
+    def same_extent(axis: int) -> bool:
+        return abs(a[axis] - b[axis]) <= EDGE_TOLERANCE and abs(a[axis + 2] - b[axis + 2]) <= EDGE_TOLERANCE
+
+    def inside(outer: Sequence[float], inner: Sequence[float]) -> bool:
+        return (inner[0] >= outer[0] - EDGE_TOLERANCE and inner[1] >= outer[1] - EDGE_TOLERANCE
+                and inner[2] <= outer[2] + EDGE_TOLERANCE and inner[3] <= outer[3] + EDGE_TOLERANCE)
+
+    return near and (same_extent(0) or same_extent(1) or inside(a, b) or inside(b, a))
+
+
 def _join(rects: list[list[float]]) -> list[list[float]]:
-    """Rectangles less than BOARD_GAP apart, joined into their bounds until none are."""
+    """Joinable rectangles, joined into their bounds until none are."""
     rects = [list(r) for r in rects]
     i = 0
     while i < len(rects):
         a = rects[i]
-        near = next(
-            (b for b in rects[i + 1:]
-             if a[0] < b[2] + BOARD_GAP and b[0] < a[2] + BOARD_GAP
-             and a[1] < b[3] + BOARD_GAP and b[1] < a[3] + BOARD_GAP),
-            None,
-        )
+        near = next((b for b in rects[i + 1:] if _joinable(a, b)), None)
         if near is None:
             i += 1
             continue

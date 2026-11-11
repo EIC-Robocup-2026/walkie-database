@@ -153,7 +153,7 @@ world repository.
 | `tests/test_store_lock.py` | A second holder is refused, a killed holder's lock is released, and the WAL is checkpointed before an install |
 | `tests/test_seed_store.py` | A bad input writes nothing, the same inputs give the same rows, a reseed keeps anchor IDs and may not overwrite its previous seed, `--id-floor` puts new anchors above it, and no fake vector enters |
 | `tests/test_seed_sim.py` | The adapter takes outlines from the world and poses from the locations, passes `--id-floor` on, refuses a blank-map locations file, and builds the same seed from `--scene` as from the anchors it prints |
-| `tests/test_scene_furniture.py` | Boxes skip visual geoms, boards make surfaces counted up from the floor, each anchor gets one room, and a rotated, jointed or non-box geometry is refused |
+| `tests/test_scene_furniture.py` | Boxes skip visual geoms, boards make surfaces counted up from the floor, lined-up boards join while an L of boards is refused, each anchor gets one room, and a rotated, jointed or non-box geometry is refused |
 | `tests/test_restore.py` | A fresh `store_id`, the larger counters, a killed node's WAL recovered first, a seed that would give an issued ID to another object refused, the floor rebuild working only from the original seed, and a crash leaving a usable store |
 | `tests/test_map_gate.py` | A wrong map, digest, baseline or clock stops the start, the default mode is unchanged, and people's times follow a fake `/clock` |
 
