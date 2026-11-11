@@ -76,12 +76,13 @@ them by meaning, by position and by words.
     and the people and session services
     ([The node's interface](#the-nodes-interface)). Offline tools build and restore
     a store ([Seeds, restore and the map gate](#seeds-restore-and-the-map-gate)). In
-    memory mode, the node also receives and checks observations and localizes them,
-    answers the object reads and the task's log from the stored rows, and publishes
-    the seeded snapshot ([The object contract](#the-object-contract)). Nothing merges
-    detections into objects yet, so the writes answer `NOT_READY`. The markers, the
-    collision boxes and the update stream are the plan, starting with
-    [object memory](object-memory.md).
+    memory mode, the node also receives and checks observations, merges them into
+    objects with top surfaces and `on` relations, and publishes them as markers
+    ([Object Memory](object-memory.md)). It localizes observations, answers the
+    object reads and the task's log from the stored rows, and publishes the seeded
+    snapshot ([The object contract](#the-object-contract)). The five object writes
+    still answer `NOT_READY`. The collision boxes and the update stream are the
+    plan.
 
 ```mermaid
 flowchart LR
@@ -459,9 +460,9 @@ first.
 !!! warning "Reads served, writes not yet"
     These types are built and frozen. In memory mode, the node serves every read,
     `remember_event`, `get_store_status` and the seeded snapshot from the stored
-    rows. Nothing merges detections yet, so the rows are the seed's anchors and
-    whatever a later core writes. The five object writes answer `NOT_READY` and keep
-    nothing. With `memory_enabled` false, every endpoint below except
+    rows: the seed's anchors and the objects that the
+    [object memory](object-memory.md) has merged and saved. The five object writes
+    answer `NOT_READY` and keep nothing. With `memory_enabled` false, every endpoint below except
     `get_store_status` answers `NOT_READY`, and there is no snapshot.
 
 | Endpoint under `/walkie_database/` | Type                                                      | What it does                                                       |
@@ -472,7 +473,7 @@ first.
 | `list_rooms`                       | `ListRooms`                                               | The rooms of the map, sorted by name                               |
 | `get_room_contents`                | `GetRoomContents`                                         | What memory holds in one room, with the search's filters           |
 | `remember_event`, `find_events`    | `RememberEvent`, `FindEvents`                             | The task's event log ([Events through the node](#events-through-the-node)) |
-| `localize_objects`                 | `LocalizeObjects`                                         | Stateless centroids of supplied clouds, at their stamp, by the [rules on the object memory page](object-memory.md#what-is-built-the-checks-not-the-merging). Stores nothing |
+| `localize_objects`                 | `LocalizeObjects`                                         | Stateless centroids of supplied clouds, at their stamp, by the [rules on the object memory page](object-memory.md#localizeobjects). Stores nothing |
 | `get_store_status`                 | `GetStoreStatus`                                          | A read-only probe of the mode, map, schema and store. Served in both modes |
 | `set_object_state`                 | `SetObjectState`                                          | `NOT_READY` until the fusion core lands. It keeps no row           |
 | `report_sighting`                  | `ReportSighting`                                          | `NOT_READY` until the fusion core lands. It keeps no row           |
@@ -585,8 +586,9 @@ the id as tie-break. `since` with `nanosec` of a second or more is `INVALID`.
 learn the mode. `map_valid` is true in memory mode, which only starts behind the
 [map gate](#the-map-gate). It gives the map's id, hash and baseline, the
 `store_id` of this run, the clock kind, the schema version, the object vector
-models, and the arrays received and refused. `ingest_enabled` and
-`captions_enabled` are false, because nothing ingests or captions yet. A legacy
+models, and the arrays received and refused. `ingest_enabled` is true in memory
+mode, where the object memory merges the arrays. `captions_enabled` is false,
+because nothing captions yet. A legacy
 store has no `store_meta` row, so its `store_id` is empty.
 
 ### The snapshot
@@ -595,8 +597,9 @@ In memory mode, the node publishes `/walkie_database/objects/snapshot` once, as
 JSON in a `std_msgs/String`, reliable, transient local and depth 1. A subscriber
 that starts later still gets it. On the wall clock it is sent at start, after a
 fresh seed's anchors are stamped. In a sim it waits for the first `/clock` sample,
-so its times are sim times. `sequence` is 0, because nothing changes the objects
-yet.
+so its times are sim times. `sequence` is 0. It is the store as it was at start:
+the object memory's later changes reach viewers through its
+[markers](object-memory.md#rviz-and-foxglove) and clients through the reads.
 
 ```json
 {
@@ -692,7 +695,7 @@ erDiagram
 | `room`               | A named room in a map                                                     | `x`, `y`, `yaw`: where the robot stands to be in the room. `name` is for display and `key` for requests ([Rooms, surfaces and relations](#rooms-surfaces-and-relations)). |
 | `object`             | One real object, merged from all its detections                           | An oriented box: centre, size, and a quaternion. `source` says where it came from: `perception` (merged from detections), `map` (drawn on the map, such as furniture) or `manual` (added by hand). See [Object fields](#object-fields). |
 | `object_cloud`       | The merged point cloud of one object                                      | Its own table, so reading `object` never loads the points                      |
-| `object_label`       | One name a detector gave an object, and how many times                    | Starts empty. `object.label` stays the name in use.                            |
+| `object_label`       | One name a detector gave an object, and how many times                    | Written by the object memory. `object.label` stays the name in use.            |
 | `object_observation` | One detection of an object                                                | No points, masks or full images ([ADR-0011](decisions/0011-merge-clouds-in-memory.md)). `view_score`, the camera pose and `color_shares` are the evidence for its crop. |
 | `surface`            | One horizontal place on an anchor, such as `shelf_2`                      | `key` is unique in its map. `geometry_valid` is 0 until it is measured.         |
 | `object_catalogue`   | One known item of a map                                                   | `weight_g` is where an object's weight comes from. `object.catalogue_id` links to it. |
@@ -709,9 +712,11 @@ erDiagram
 
 ### Object fields
 
-Migration 0004 adds these columns to `object`. They hold what object memory will
-write. No code decides a state or merges an object yet, so most of them keep their
-defaults. A query computes the belief from `p_exist` and `last_verified` when it
+Migration 0004 adds these columns to `object`. The object memory writes `layer`,
+`last_verified`, `geometry_valid`, `geometry_stamp`, `depth_seen`,
+`best_view_quality`, `viewpoints`, `revision` and `merged_into`. It sets a stored
+object `present` with `p_exist` at least 0.9, and no code sets any other state yet,
+so the rest keep their defaults. A query computes the belief from `p_exist` and `last_verified` when it
 reads, and stores nothing ([Object queries](#object-queries)).
 
 | Column                                | Default     | What it is                                                                  |
@@ -730,7 +735,7 @@ reads, and stores nothing ([Object queries](#object-queries)).
 | `printed_text`, `caption_model`, `prompt_version` | None | Reserved for captions, which are off                                  |
 | `caption_view_id`                     | None        | The `object_observation` the caption came from. Not a foreign key, because that row already points back here. |
 | `best_view_quality`, `viewpoints`     | 0           | The best view so far, and how many different views                           |
-| `fingerprint_weight`                  | 0           | How much evidence the stored embedding holds                                 |
+| `fingerprint_weight`                  | 0           | How much evidence the stored embedding holds: the length of the score-weighted sum it is the direction of. A seeded vector counts as one crop (1.0). |
 | `anchor_node_id`, `anchor_offset`     | None        | Unused for now: a pose relative to a saved map node                          |
 | `merged_into`, `split_from`           | None        | Links to the object that took over, or the one this came from. Set to none when that object is deleted. |
 | `gripper_frame`                       | None        | Reserved for a held object                                                   |
@@ -781,13 +786,17 @@ across a restart, so giving one twice would point a client at the wrong object.
   cycle, and stop after 32 links.
 
 The node reads tombstones and follows `merged_into` when it answers a query, with
-the same 32-link limit. Nothing in the node reserves ids or writes a tombstone yet.
+the same 32-link limit. The object memory reserves the ids of new objects and
+writes a tombstone when it merges two stored objects.
 
 ### Rooms, surfaces and relations
 
 `src/walkie_database/object_context.py` holds the helpers for these tables. They
-record what a caller states, and nothing infers a relation yet
-([ADR-0021](decisions/0021-rooms-and-object-queries.md)).
+record what a caller states
+([ADR-0021](decisions/0021-rooms-and-object-queries.md)). The object memory is the
+one caller that infers: it measures each anchor's top surface and states `on`
+relations from geometry
+([ADR-0026](decisions/0026-anchor-surfaces-and-on-relations.md)).
 
 A room has two names. `key`, such as `living_room`, is what a request uses.
 `name`, such as `living room`, is what a person reads. `room_by_key` matches only
@@ -1528,8 +1537,8 @@ accuracy and query latency under load. No fake test stands in for these.
 
     --8<-- "architecture/decisions/0010-session-owns-people-and-conversations.md:body"
 
-The object memory decisions, ADR-0011 to ADR-0013, are on the
-[Object Memory](object-memory.md#decisions) page.
+The object memory decisions, ADR-0011 to ADR-0013 and ADR-0025 to ADR-0027, are on
+the [Object Memory](object-memory.md#decisions) page.
 
 ??? success "ADR-0014: Use Zenoh as the default ROS 2 middleware · Accepted"
 

@@ -96,8 +96,9 @@ nav:
       - 12. Check Observations and Localize Them: setup/12-observations-and-localize.md
       - 13. Serve Object Queries, the Task's Log and the Snapshot: setup/13-object-queries-and-events.md
       - 14. Check the Pair Locally Before Pushing: setup/14-pair-check.md
+      - 15. Run the Object Memory on the Simulation: setup/15-scene-graph-demo.md
   - Architecture:
       - architecture/index.md
       - The Database: architecture/database.md
-      - Object Memory (Proposed): architecture/object-memory.md
+      - Object Memory: architecture/object-memory.md
       - Sim Harvest Support (Proposed): architecture/harvest.md
