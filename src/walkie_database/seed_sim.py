@@ -7,7 +7,8 @@ that document, and passes it to the same checks and builder as
     python -m walkie_database.seed_sim --map-folder PATH --arena NAME \\
         --date YYYY-MM-DD --clock-kind wall|ros_sim --output PATH \\
         --world-source PATH --locations PATH --room-names PATH \\
-        [--anchors PATH] [--catalogue PATH] [--previous-seed PATH] [--id-floor N] [--replace]
+        [--anchors PATH | --scene PATH --furniture PATH] [--catalogue PATH] \\
+        [--previous-seed PATH] [--id-floor N] [--replace]
 
 Each input gives one thing:
 
@@ -19,6 +20,10 @@ Each input gives one thing:
 * ``--locations`` gives each room's stand pose and description, from
   ``[locations."living room"]``. The location's name is exactly the room's display
   name, because the agent's places and the rooms share that name.
+* ``--scene`` and ``--furniture`` give the anchors, measured from the world's
+  MuJoCo scene for the bodies the furniture file names
+  (``walkie_database.scene_furniture``). ``--anchors`` gives them from a file
+  instead. With neither, the seed has no anchors.
 
 A missing name or location is an error, and no coordinate has a fallback. A
 locations file may list other places, which are not rooms. The agent's
@@ -36,6 +41,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from walkie_database.people import Refused
+from walkie_database.scene_furniture import furniture_anchors, read_scene
 from walkie_database.seed_store import (
     REFUSALS,
     SCHEMA_VERSION,
@@ -121,9 +127,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--world-source", required=True, help="the world's authoring TOML")
     parser.add_argument("--locations", required=True, help="the TOML with each room's stand pose")
     parser.add_argument("--room-names", required=True, help="the file mapping room keys to display names")
-    parser.add_argument("--anchors", help="an anchors file. Without it the seed has no anchors.")
+    parser.add_argument("--anchors", help="an anchors file. Without it or --scene the seed has no anchors.")
+    parser.add_argument("--scene", help="the world's MuJoCo scene, to measure the furniture from")
+    parser.add_argument("--furniture", help="the file naming the scene's furniture bodies, with --scene")
     parser.add_argument("--catalogue", help="a catalogue file. Without it the catalogue is empty.")
     args = parser.parse_args(argv)
+    if (args.scene is None) != (args.furniture is None):
+        parser.error("--scene and --furniture go together")
+    if args.anchors and args.scene:
+        parser.error("--anchors cannot be used with --scene")
     try:
         folder, map_id = identify_map(args.map_folder, args.arena, args.date)
         rooms = normalize_rooms(
@@ -132,9 +144,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             _read_toml(args.locations, "locations"),
             read_document(args.room_names, "room names"),
         )
-        anchors = read_document(args.anchors, "anchors") if args.anchors else empty_anchors(map_id)
+        if args.scene:
+            anchors = furniture_anchors(
+                map_id, read_scene(args.scene), read_document(args.furniture, "furniture"), rooms["rooms"]
+            )
+        elif args.anchors:
+            anchors = read_document(args.anchors, "anchors")
+        else:
+            anchors = empty_anchors(map_id)
         catalogue = read_document(args.catalogue, "catalogue") if args.catalogue else empty_catalogue()
         print(json.dumps(rooms, indent=2))
+        if args.scene:
+            print(json.dumps(anchors, indent=2))
         summary = write_seed(
             folder=folder, map_id=map_id, arena=args.arena, date=args.date,
             clock_kind=args.clock_kind, rooms_document=rooms, anchors_document=anchors,

@@ -1,0 +1,14 @@
+# The Chula world's furniture, for `db-seed-sim --scene <world>/scene.xml --furniture`.
+# Each body is in walkie-ros simulation/mujoco/worlds/chula_pat14_6/scene.xml. The keys
+# match tools/truth/chula_pat14_6.json, and the labels are the detector's names.
+schema_version: 1
+furniture:
+- {body: chula_sofa, key: sofa, label: sofa}
+- {body: chula_coffee_table, key: coffee_table, label: table}
+- {body: chula_tv_desk, key: tv_desk, label: table}
+- {body: chula_kitchen_table, key: kitchen_table, label: table}
+- {body: chula_bar, key: bar, label: table}
+- {body: chula_shelf, key: shelf, label: shelf}
+- {body: chula_stool_1, key: stool_1, label: chair}
+- {body: chula_stool_2, key: stool_2, label: chair}
+- {body: chula_stool_3, key: stool_3, label: chair}

@@ -40,8 +40,9 @@ database during an episode.
   ([ADR-0023](decisions/0023-offline-restore-and-map-gate.md)).
 - **A sim seed per world.** `pixi run db-seed-sim` builds a store with one map and
   its two rooms, from the world's authoring file, a locations file and a room-names
-  file. The map's ID is computed from its digest. It is not `chula_pat14_6`. The seed
-  holds no live objects and no personal data
+  file, and optionally the furniture, measured from the world's MuJoCo scene. The
+  map's ID is computed from its digest. It is not `chula_pat14_6`. The seed holds no
+  live objects and no personal data
   ([ADR-0016](decisions/0016-sim-snapshot-per-episode.md)).
 - **Restored for every episode, with the node stopped.** `pixi run db-restore` resets
   the worker's one store to the seed, and a newly started node opens it. No episode
@@ -81,6 +82,7 @@ The seed comes from three files and one map folder:
 | The world's authoring file | `--world-source` | The room keys and their outlines |
 | The room names | `--room-names` | Each room key's display name: `living_room` to `living room`, and `kitchen_room` to `kitchen room` |
 | The locations | `--locations` | Each room's stand pose and description, under exactly its display name, such as `[locations."living room"]` |
+| The scene and the furniture file (optional) | `--scene` and `--furniture` | The furniture anchors: each named body's box, surfaces and room, measured from the world's MuJoCo `scene.xml` ([Furniture from the scene](#furniture-from-the-scene)) |
 
 The authoring file for this world is
 `simulation/mujoco/worlds/chula_pat14_6/authoring/source/30_16102026_ChulaPat14_6_world.toml`
@@ -94,9 +96,10 @@ names are not this world's display names, so the builder refuses it. This world
 needs its own locations file, which does not exist yet.
 
 `pixi run db-seed-sim` runs `walkie_database.seed_sim`. It takes all of those, plus
-`--clock-kind ros_sim` and `--output`, and optionally `--anchors`, `--catalogue`,
-`--previous-seed`, `--id-floor` and `--replace`. It prints the normalized rooms as
-JSON, and passes them to the same code as `db-seed-store`. It writes these rows:
+`--clock-kind ros_sim` and `--output`, and optionally `--scene` with `--furniture` or
+`--anchors`, `--catalogue`, `--previous-seed`, `--id-floor` and `--replace`. It prints
+the normalized rooms as JSON, then the measured anchors when `--scene` is given, and
+passes them to the same code as `db-seed-store`. It writes these rows:
 
 | Table | Rows | Source |
 | ----- | ---- | ------ |
@@ -104,7 +107,8 @@ JSON, and passes them to the same code as `db-seed-store`. It writes these rows:
 | `store_meta` | One, with `refresh_anchors_pending` set | The same |
 | `room` | One per room in `world.toml`: today `living_room` and `kitchen_room`, each with `name`, `description`, `x`, `y` and `yaw` | Keys: `world.toml`. Name: the room-names file. Stand pose and description: the locations file |
 | `room_shape` | The outline of each room | The room's `polygon` in `world.toml` |
-| `object`, `surface` and `object_catalogue` | None, unless a reviewed `--anchors` or `--catalogue` file supplies them | [The input files](database.md#the-input-files) |
+| `object` and `surface` | One anchor per furniture body with `--scene`, or those of a reviewed `--anchors` file. Otherwise none | [Furniture from the scene](#furniture-from-the-scene), or [the input files](database.md#the-input-files) |
+| `object_catalogue` | None, unless a reviewed `--catalogue` file supplies them | [The input files](database.md#the-input-files) |
 | Every other table | None | — |
 
 The stand pose comes from the locations file because that is where the
@@ -127,6 +131,41 @@ no display name, when a display name has no location, or when that location's st
 pose is outside the room's outline. There is no fallback coordinate. A wrong seed
 then stops the run before the first episode, instead of failing one episode at a
 time.
+
+### Furniture from the scene
+
+In simulation, the world's MuJoCo scene stands in for the static scan of the arena.
+The furniture file names the scene's furniture bodies, with each one's anchor key and
+the label the detector uses. The Chula world's is
+`tools/furniture/chula_pat14_6.yaml`:
+
+```yaml
+schema_version: 1
+furniture:
+- {body: chula_sofa, key: sofa, label: sofa}
+- {body: chula_coffee_table, key: coffee_table, label: table}
+```
+
+`walkie_database.scene_furniture` measures one anchor per body:
+
+- **Box:** the bounds of the body's collision geoms. A geom whose `contype` and
+  `conaffinity` are both 0, directly or through its default class, only draws and is
+  skipped.
+- **Surfaces:** the top of each board, a collision geom at most 0.12 m thick with a
+  footprint of at least 0.05 m². Boards at one height less than 0.05 m apart are one
+  surface, as the sofa's three seat cushions are. The highest is `<key>_top`, the
+  lower ones `<key>_level_<n>`, counted up from the floor. The shelf gets
+  `shelf_level_1` to `shelf_level_4` and `shelf_top`.
+- **Room:** the room whose outline holds the box's centre.
+
+It reads only box and cylinder geoms, on unrotated bodies directly in the
+`worldbody`, with no joints, child bodies or frames. Anything else is refused, and
+nothing is written. A refused piece of furniture goes in an `--anchors` file instead,
+written by hand.
+
+The memory confirms a seeded anchor when it sees it, and merges into it the furniture
+the detector names otherwise inside its box
+([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)).
 
 ### Coordinates
 

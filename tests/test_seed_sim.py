@@ -22,6 +22,7 @@ from seed_helpers import (
 
 from walkie_database import seed_sim, seed_store
 from walkie_database.db import connect
+from walkie_database.object_context import usable_surfaces
 from walkie_database.people import Refused
 
 WORLD = """\
@@ -187,6 +188,97 @@ def test_the_id_floor_reaches_the_seed(tmp_path, folder, output):
     assert tuple(conn.execute("SELECT key, id FROM object").fetchone()) == ("table", 8)
     assert conn.execute("SELECT id FROM last_id WHERE table_name = 'object'").fetchone()[0] == 8
     conn.close()
+
+
+SCENE = """\
+<mujoco>
+  <worldbody>
+    <body name="w_table" pos="2 2 0">
+      <geom name="top" type="box" pos="0 0 0.78" size="0.6 0.4 0.02"/>
+      <geom name="leg" type="box" pos="0 0 0.38" size="0.03 0.03 0.38"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
+FURNITURE = {"schema_version": 1, "furniture": [{"body": "w_table", "key": "table", "label": "table"}]}
+
+
+def scene_argv(tmp_path, folder, output, *, scene=SCENE, extra=()):
+    (tmp_path / "scene.xml").write_text(scene)
+    furniture = write_yaml(tmp_path / "furniture.yaml", FURNITURE)
+    flags = ("--scene", str(tmp_path / "scene.xml"), "--furniture", str(furniture), *extra)
+    return sim_argv(tmp_path, folder, output, extra=flags)
+
+
+def documents_printed(capsys):
+    text = capsys.readouterr().out
+    decoder, documents, at = json.JSONDecoder(), [], text.find("{")
+    while at != -1:
+        document, end = decoder.raw_decode(text, at)
+        documents.append(document)
+        at = text.find("{", end)
+    return documents
+
+
+def test_the_scenes_furniture_becomes_the_seeds_anchors(tmp_path, folder, output):
+    assert seed_sim.main(scene_argv(tmp_path, folder, output)) == 0
+
+    conn = connect(output, readonly=True)
+    table = conn.execute("SELECT * FROM object WHERE key = 'table'").fetchone()
+    assert table["label"] == "table"
+    living = conn.execute("SELECT id FROM room WHERE key = 'living_room'").fetchone()[0]
+    assert table["room_id"] == living
+    assert (table["center_x"], table["center_y"], table["center_z"]) == pytest.approx((2.0, 2.0, 0.4))
+    surfaces = usable_surfaces(conn, table["id"])
+    assert [(s["key"], s["z"]) for s in surfaces] == [("table_top", pytest.approx(0.8))]
+    conn.close()
+
+
+def test_the_printed_anchors_build_the_same_seed_through_an_anchors_file(tmp_path, folder, output, capsys):
+    assert seed_sim.main(scene_argv(tmp_path, folder, output)) == 0
+    rooms, anchors = documents_printed(capsys)
+    assert rooms["rooms"][0]["key"] == "living_room"
+    other = tmp_path / "other" / "seed.db"
+
+    from_file = write_yaml(tmp_path / "anchors.yaml", anchors)
+    assert seed_sim.main(sim_argv(tmp_path, folder, other, extra=("--anchors", str(from_file)))) == 0
+
+    first, second = connect(output, readonly=True), connect(other, readonly=True)
+    assert dump_rows(first) == dump_rows(second)
+    first.close()
+    second.close()
+
+
+def test_a_scene_that_cannot_be_measured_writes_nothing(tmp_path, folder, output, capsys):
+    scene = SCENE.replace('pos="2 2 0"', 'pos="2 2 0" quat="0.92 0 0 0.38"')
+    assert seed_sim.main(scene_argv(tmp_path, folder, output, scene=scene)) == 1
+
+    error = capsys.readouterr().err
+    assert "Refused, and wrote nothing: The body w_table is rotated" in error
+    assert not output.parent.exists()
+
+
+@pytest.mark.parametrize(
+    "drop, extra, message",
+    [
+        ("--furniture", (), "--scene and --furniture go together"),
+        ("--scene", (), "--scene and --furniture go together"),
+        (None, ("--anchors", "anchors.yaml"), "--anchors cannot be used with --scene"),
+    ],
+)
+def test_the_scene_flags_go_together_and_not_with_anchors(tmp_path, folder, output, drop, extra, message, capsys):
+    argv = scene_argv(tmp_path, folder, output, extra=extra)
+    if drop:
+        at = argv.index(drop)
+        del argv[at : at + 2]
+
+    with pytest.raises(SystemExit) as stopped:
+        seed_sim.main(argv)
+
+    assert stopped.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not output.parent.exists()
 
 
 @pytest.mark.parametrize(

@@ -12,8 +12,10 @@ a cloud. [Object Memory](../architecture/object-memory.md) has the exact rules.
 [ADR-0025](../architecture/decisions/0025-merge-by-overlap-and-label.md) explains
 the matching without embeddings,
 [ADR-0026](../architecture/decisions/0026-anchor-surfaces-and-on-relations.md) the
-surfaces, and [ADR-0027](../architecture/decisions/0027-replay-a-recording-offline.md)
-the replay.
+surfaces, [ADR-0027](../architecture/decisions/0027-replay-a-recording-offline.md)
+the replay, and
+[ADR-0028](../architecture/decisions/0028-seeded-anchors-own-their-box.md) the
+seeded furniture.
 
 | File | What it holds |
 | ---- | ------------- |
@@ -22,6 +24,8 @@ the replay.
 | `src/walkie_database/object_memory_store.py` | Saves tracks, surfaces and `on` relations in one transaction, and loads them at start |
 | `src/walkie_database/object_markers.py` | The `MarkerArray` and the `PointCloud2` |
 | `tools/replay_memory.py` | The offline replay and its score (`pixi run memory-replay`) |
+| `src/walkie_database/scene_furniture.py` | Seed anchors measured from a MuJoCo scene (`db-seed-sim --scene`) |
+| `tools/furniture/chula_pat14_6.yaml` | The Chula world's furniture bodies, with each one's anchor key and label |
 | `tools/truth/chula_pat14_6.json` | The Chula world's furniture and objects, as boxes in the map frame |
 
 `scipy` and `scikit-learn` are new dependencies, for the KD-tree and DBSCAN.
@@ -63,15 +67,24 @@ A=<walkie-agent-ros>
 pixi run db-seed-sim --map-folder $W/map --arena chula --date 2026-11-12 --clock-kind ros_sim \
     --world-source $W/authoring/source/30_16102026_ChulaPat14_6_world.toml \
     --locations $A/config/locations.chula_pat14_6.toml \
-    --room-names room-names.yaml --output /tmp/chula/seed.db
+    --room-names room-names.yaml \
+    --scene $W/scene.xml --furniture tools/furniture/chula_pat14_6.yaml \
+    --output /tmp/chula/seed.db
 pixi run db-restore --seed /tmp/chula/seed.db --db /tmp/chula/walkie.db \
     --map-folder $W/map --clock-kind ros_sim
 ```
 
-This seed holds only the two rooms, so the memory finds every piece of furniture
-itself. Its map id is `chula-<date>-<digest>`, where the last 8 characters come from
-the map's digest. The node refuses any other id, and its message names the right
-one.
+The seed holds the two rooms and the world's nine pieces of furniture, as anchors
+measured from `scene.xml` for the bodies the furniture file names
+([The sim seed](../architecture/harvest.md#the-sim-seed)). In simulation, this
+stands in for the static scan of the arena. The memory confirms each anchor when it
+sees it. Furniture the detector names otherwise inside an anchor's box merges into
+that anchor ([ADR-0028](../architecture/decisions/0028-seeded-anchors-own-their-box.md)).
+Leave out `--scene` and `--furniture` for a rooms-only seed, in which the memory
+finds every piece of furniture itself.
+
+The map id is `chula-<date>-<digest>`, where the last 8 characters come from the
+map's digest. The node refuses any other id, and its message names the right one.
 
 ## Step 2: Run the node in memory mode
 
