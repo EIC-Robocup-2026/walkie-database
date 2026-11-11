@@ -1,6 +1,7 @@
 """tools/replay_memory.py's merging, from an empty store or a seed, with no bag."""
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -82,3 +83,28 @@ def test_the_seed_is_only_read(tmp_path):
 def test_a_missing_seed_stops_the_replay(tmp_path):
     with pytest.raises(SystemExit, match="is not a file"):
         replay.run(intake(), MergeConfig(), str(tmp_path / "none.db"))
+
+
+@pytest.mark.parametrize("alias", ["same", "symlink", "hardlink", "relative"])
+@pytest.mark.parametrize("flag", ["--seed", "--truth"])
+def test_json_cannot_overwrite_a_file_the_replay_reads(tmp_path, monkeypatch, alias, flag):
+    source = tmp_path / "input"
+    source.write_bytes(b"kept")
+    output = {
+        "same": source,
+        "symlink": tmp_path / "link",
+        "hardlink": tmp_path / "hard",
+        "relative": Path("..") / tmp_path.name / "input",
+    }[alias]
+    if alias == "symlink":
+        output.symlink_to(source)
+    elif alias == "hardlink":
+        os.link(source, output)
+    monkeypatch.chdir(tmp_path)
+    # The bag does not exist: the check must stop the replay before it reads anything.
+    monkeypatch.setattr(sys, "argv", ["memory-replay", str(tmp_path / "no-bag"), flag, str(source), "--json", str(output)])
+
+    with pytest.raises(SystemExit, match=f"is the {flag} file"):
+        replay.main()
+
+    assert source.read_bytes() == b"kept"

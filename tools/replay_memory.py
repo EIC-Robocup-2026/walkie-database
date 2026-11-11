@@ -334,6 +334,23 @@ def parse_overrides(pairs: list[str]) -> dict:
     return overrides
 
 
+def check_output(output: str | None, inputs: dict[str, str | None]) -> None:
+    """Stop before the replay starts if ``--json`` names a file it reads.
+
+    *inputs* maps each input flag to its path. A symbolic or hard link to an input
+    counts as the input.
+    """
+    if output is None:
+        return
+    target = Path(output)
+    for flag, path in inputs.items():
+        if path is None:
+            continue
+        source = Path(path)
+        if target.exists() and source.exists() and target.samefile(source):
+            raise SystemExit(f"--json {output} is the {flag} file. Write the summary to another path.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("bag", help="the bag folder")
@@ -349,6 +366,7 @@ def main() -> None:
                         help="share of the smaller footprint an anchor must share with known furniture")
     parser.add_argument("--json", help="write the summary and every track to this file")
     args = parser.parse_args()
+    check_output(args.json, {"--seed": args.seed, "--truth": args.truth})
 
     config = dataclasses.replace(MergeConfig(), **parse_overrides(args.set))
     intake = read_intake(args.bag, topic=args.topic, map_frame=args.map_frame, merge_period=args.merge_period)

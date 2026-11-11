@@ -156,7 +156,8 @@ pixi run memory-replay chula-drive-01 --seed /tmp/chula/seed.db --truth tools/tr
 `--seed` starts from a copy of the step 1 seed, with its anchors loaded as the node
 loads them after `db-restore`. The seed itself is only read. Without `--seed`, the
 replay starts from an empty store. `--set NAME=VALUE` overrides any `MergeConfig`
-field. `--json` writes the summary, the settings and every track. One run of the 2600
+field. `--json` writes the summary, the settings and every track, and the replay
+refuses to start if it names the seed or the truth file. One run of the 2600
 arrays of `chula-drive-01` takes 60 to 80 s. The summary it prints:
 
 | Key | What it counts |
@@ -208,7 +209,7 @@ pixi run test tests/test_object_memory.py tests/test_object_memory_store.py \
 | `tests/test_object_memory_node.py` | Arrays to a stored object that `search_objects` finds, a missing transform, one view not being enough, markers and cloud for a late subscriber, and a restarted node |
 | `tests/test_object_markers.py` | The `on` line ends on the anchor's surface, and a relation to an object that is not shown draws nothing |
 | `tests/test_node_shutdown.py` | A second Ctrl-C does not cut the last save short, and Ctrl-C exits 0 when rclpy is already shut down |
-| `tests/test_replay_memory.py` | The replay starts from a seed's anchors as the node does, a table-named strip of a seeded sofa merges into it, and the seed is only read |
+| `tests/test_replay_memory.py` | The replay starts from a seed's anchors as the node does, a table-named strip of a seeded sofa merges into it, the seed is only read, and `--json` cannot overwrite the seed or the truth file, by name or through a link |
 
 `tests/test_node_shutdown.py` runs the node in its own process with
 `tests/shutdown_harness.py`, and sends SIGINT to its process group, as a terminal

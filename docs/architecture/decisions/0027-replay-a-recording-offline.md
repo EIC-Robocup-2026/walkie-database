@@ -38,7 +38,7 @@ known boxes in the map frame. `--json` writes the summary and every track.
   it reading the bag. A sweep runs several settings in parallel processes.
 - No ROS graph, node or real store is touched. The tool writes only a scratch
   store in a temporary folder, and the `--json` file. A `--seed` store is only
-  read.
+  read, and the replay refuses a `--json` path that is the seed or the truth file.
 - The result is the best the node could do on that recording. The node's
   subscription keeps one array and can drop arrays when it falls behind, and the
   tool never drops one. On the drive, the live node and the replay agreed: 41
