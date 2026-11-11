@@ -734,7 +734,7 @@ reads, and stores nothing ([Object queries](#object-queries)).
 | `attributes`                          | `{}`        | A JSON object. The application checks its keys and values.                   |
 | `printed_text`, `caption_model`, `prompt_version` | None | Reserved for captions, which are off                                  |
 | `caption_view_id`                     | None        | The `object_observation` the caption came from. Not a foreign key, because that row already points back here. |
-| `best_view_quality`, `viewpoints`     | 0           | The best view so far, and how many different views                           |
+| `best_view_quality`, `viewpoints`     | 0           | The best view so far, and how many different views. The object memory counts the detection arrays its sightings, and those of the objects merged into it, came from, each stamp once. |
 | `fingerprint_weight`                  | 0           | How much evidence the stored embedding holds: the length of the score-weighted sum it is the direction of. A seeded vector counts as one crop (1.0). |
 | `anchor_node_id`, `anchor_offset`     | None        | Unused for now: a pose relative to a saved map node                          |
 | `merged_into`, `split_from`           | None        | Links to the object that took over, or the one this came from. Set to none when that object is deleted. |

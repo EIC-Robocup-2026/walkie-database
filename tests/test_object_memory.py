@@ -297,7 +297,7 @@ def test_merged_tracks_count_an_array_they_both_saw_once():
     def track(key, stamps):
         return Track(key=key, layer=MOVABLE, points=points + 0.005 * key, labels={"cup": len(stamps)},
                      first_seen=1.0, last_seen=max(stamps), n_detections=len(stamps), n_views=len(stamps),
-                     _view_stamps=set(stamps))
+                     unsaved_views=set(stamps))
 
     memory = ObjectMemory(MergeConfig(confirm_views=3), tracks=[track(1, {1.0, 2.0}), track(2, {1.0, 2.0})])
     memory.maintain(now=2.0)
@@ -310,16 +310,32 @@ def test_merged_tracks_count_an_array_they_both_saw_once():
 
 
 def test_views_loaded_from_the_store_still_count_after_a_merge():
-    """A loaded track has views but no stamps: they are kept, and only shared stamps are removed."""
+    """A loaded track has views but no unsaved stamps: they are kept, and only shared stamps are removed."""
     points = voxel_downsample(blob((1.0, 1.0, 0.8), (0.08, 0.08, 0.1)), 0.025)
     stored = Track(key=1, layer=MOVABLE, points=points, labels={"cup": 4}, first_seen=1.0, last_seen=2.0,
                    n_detections=4, n_views=4, object_id=3)
     fresh = Track(key=2, layer=MOVABLE, points=points + 0.005, labels={"cup": 1}, first_seen=5.0,
-                  last_seen=5.0, n_detections=1, n_views=1, _view_stamps={5.0})
+                  last_seen=5.0, n_detections=1, n_views=1, unsaved_views={5.0})
     memory = ObjectMemory(tracks=[stored, fresh])
     memory.maintain(now=6.0)
     [merged] = memory.tracks
     assert (merged.object_id, merged.n_views) == (3, 5)
+    # The fresh track was never stored, so the store holds no history to count again.
+    assert not merged.views_counted and merged.unsaved_views == {5.0}
+
+
+def test_absorbing_a_stored_track_asks_the_store_to_count_the_views_again():
+    points = voxel_downsample(blob((1.0, 1.0, 0.8), (0.08, 0.08, 0.1)), 0.025)
+    a, b = (Track(key=key, layer=MOVABLE, points=points + 0.005 * key, labels={"cup": 3}, first_seen=1.0,
+                  last_seen=3.0, n_detections=3, n_views=3, object_id=key, views_counted=True, dirty=False,
+                  needs_cleanup=False)
+            for key in (1, 2))
+    memory = ObjectMemory(tracks=[a, b])
+    memory.maintain(now=4.0)
+    [merged] = memory.tracks
+    # Until the save counts the shared arrays in the store, both histories are summed.
+    assert merged.n_views == 6
+    assert not merged.views_counted
 
 
 def test_overlapping_movable_tracks_named_otherwise_merge_and_anchors_do_not():

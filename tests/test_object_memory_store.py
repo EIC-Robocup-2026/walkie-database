@@ -11,7 +11,7 @@ from test_object_memory import MODEL, blob, embedding_near, seen, unit
 from walkie_database.db import connect, transaction
 from walkie_database.migrate import migrate
 from walkie_database.object_context import relations, set_room_shape
-from walkie_database.object_memory import ANCHOR, MOVABLE, MergeConfig, ObjectMemory
+from walkie_database.object_memory import ANCHOR, MOVABLE, Maintenance, MergeConfig, ObjectMemory
 from walkie_database.object_memory_store import load_tracks, save, surface_key
 from walkie_database.objects import search_object_vectors
 
@@ -281,6 +281,39 @@ def test_a_seeded_anchor_loads_as_a_fixed_track_and_keeps_its_geometry(store):
     assert tuple(row) == (2.0, 1.2, 2, 1.0)
 
 
+def stored_views(store, object_id):
+    return store.execute("SELECT viewpoints FROM object WHERE id = ?", (object_id,)).fetchone()[0]
+
+
+def test_a_save_whose_commit_fails_is_rolled_back_and_the_retry_writes_once(store):
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    [object_id] = run(memory, store, [1.0, 2.0], lambda t: [seen(cup, stamp=t)]).inserted
+    for stamp in (3.0, 4.0):
+        memory.add([seen(cup, stamp=stamp)])
+    maintenance = Maintenance(merged=memory.maintain(now=4.0).merged)
+    [track] = memory.tracks
+
+    def deny_commit(action, operation, *args):
+        # SQLite keeps the transaction open after a failed COMMIT, as after SQLITE_BUSY.
+        if action == sqlite3.SQLITE_TRANSACTION and operation == "COMMIT":
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    store.set_authorizer(deny_commit)
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        save(store, memory, maintenance, map_id=MAP)
+    store.set_authorizer(None)
+    assert not store.in_transaction
+    assert (track.dirty, len(track.sightings), track.n_views) == (True, 2, 4)
+    assert store.execute("SELECT count(*) FROM object_observation").fetchone()[0] == 2
+    assert stored_views(store, object_id) == 2
+
+    assert save(store, memory, maintenance, map_id=MAP).updated == [object_id]
+    assert store.execute("SELECT count(*) FROM object_observation").fetchone()[0] == 4
+    assert stored_views(store, object_id) == track.n_views == 4
+
+
 def test_a_model_change_keeps_only_the_vector_of_the_new_model(store, cup_vector):
     """After a restart the object has the new model's vector and weight, not the old vector."""
     # A second model whose name sorts first, so a vector left behind would load first.
@@ -301,3 +334,67 @@ def test_a_model_change_keeps_only_the_vector_of_the_new_model(store, cup_vector
     [loaded] = load_tracks(store, MAP, CONFIG)
     assert loaded.model == MODEL
     assert loaded.embedding_sum == pytest.approx(track.embedding_sum, abs=1e-5)
+
+
+def test_stored_objects_that_saw_the_same_arrays_count_them_once_after_a_restart(store):
+    """Two objects stored apart, seen in arrays 1 to 3 and 2 to 4, merge into 4 views, not 6."""
+    memory = ObjectMemory(CONFIG)
+    left = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    run(memory, store, [1.0, 2.0, 3.0, 4.0], lambda t: (
+        ([seen(left, stamp=t)] if t <= 3.0 else []) + ([seen(left + [0.5, 0.0, 0.0], stamp=t)] if t >= 2.0 else [])))
+    assert [stored_views(store, t.object_id) for t in memory.tracks] == [3, 3]
+
+    restarted = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
+    first, second = sorted(restarted.tracks, key=lambda t: t.object_id)
+    second.set_points(first.points + 0.003)  # a better localization shows one cup
+    maintenance = Maintenance(merged=restarted.maintain(now=5.0).merged)
+    assert restarted.tracks == [first]
+    assert first.n_views == 6  # in memory the two histories are summed
+
+    assert save(store, restarted, maintenance, map_id=MAP).merged == [(second.object_id, first.object_id)]
+    assert stored_views(store, first.object_id) == first.n_views == 4
+    [loaded] = load_tracks(store, MAP, CONFIG)
+    assert loaded.n_views == 4
+
+
+def test_the_first_save_after_a_restart_counts_the_stored_views_again(store):
+    """A count an older build stored too high is replaced by the count of the stored arrays."""
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    [object_id] = run(memory, store, [1.0, 2.0], lambda t: [seen(cup, stamp=t)]).inserted
+    with transaction(store):
+        store.execute("UPDATE object SET viewpoints = 9 WHERE id = ?", (object_id,))
+    restarted = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
+    run(restarted, store, [3.0], lambda t: [seen(cup, stamp=t)])
+    assert stored_views(store, object_id) == restarted.tracks[0].n_views == 3
+
+
+def test_an_array_the_store_already_holds_is_not_counted_again(store):
+    """A part split off in array 2 merges after the save that stored array 2 for the object."""
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    stray = blob((1.6, 0.5, 0.8), (0.08, 0.08, 0.1), seed=5)  # too far to join the cup
+    run(memory, store, [1.0, 2.0], lambda t: [seen(cup, stamp=t)] + ([seen(stray, stamp=t)] if t == 2.0 else []))
+    stored = next(t for t in memory.tracks if t.object_id is not None)
+    part = next(t for t in memory.tracks if t.object_id is None)
+    assert (stored.n_views, stored.unsaved_views, part.unsaved_views) == (2, set(), {2.0})
+
+    part.set_points(stored.points + 0.003)
+    maintenance = Maintenance(merged=memory.maintain(now=3.0).merged)
+    assert memory.tracks == [stored]
+    assert stored.n_views == 3  # memory no longer holds array 2 for the stored cup
+
+    save(store, memory, maintenance, map_id=MAP)
+    assert stored_views(store, stored.object_id) == stored.n_views == 2
+
+
+def test_memory_holds_only_the_views_the_store_lacks(store):
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    for first in range(1, 50, 5):
+        run(memory, store, [float(s) for s in range(first, first + 5)], lambda t: [seen(cup, stamp=t)])
+        [track] = memory.tracks
+        assert track.unsaved_views == set()
+    assert stored_views(store, track.object_id) == track.n_views == 50
+    [loaded] = load_tracks(store, MAP, CONFIG)
+    assert loaded.n_views == 50

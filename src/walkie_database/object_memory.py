@@ -28,7 +28,8 @@ Upkeep (``ObjectMemory.maintain``)
     ``ghost_age_s`` is dropped; and two tracks that overlap and look alike merge,
     after which the merged track is cleaned and measured again in the same round.
     A track is confirmed once it has been seen in ``confirm_views`` arrays, each
-    array counted once even when two merged tracks both saw it. Only a
+    array counted once even when two merged tracks both saw it (for stored
+    objects, the save counts the arrays against the store). Only a
     confirmed track gets an object id and a row in the store, so a one-off false
     detection never reaches it.
 
@@ -180,7 +181,11 @@ class Track:
     first_seen: float
     last_seen: float
     n_detections: int = 0
-    n_views: int = 0  # arrays that showed it; an array with two of its detections counts once
+    # Arrays that showed it; an array with two of its detections counts once. Exact
+    # for a track the store has not seen. For a stored track, a merge with another
+    # stored one can count an array both saw twice until the next save, which counts
+    # it again against the stored observations.
+    n_views: int = 0
     best_view_quality: float = 0.0
     model: str = ""
     embedding_sum: np.ndarray | None = None
@@ -191,9 +196,12 @@ class Track:
     dirty: bool = True  # changed since the store last saw it
     needs_cleanup: bool = True  # changed since its last denoise and box
     sightings: list[Sighting] = field(default_factory=list)  # not yet in the store
-    # The stamps of the arrays counted in n_views since this process loaded the track.
-    # Views loaded from the store have no stamp, so they are counted but not listed.
-    _view_stamps: set[float] = field(default_factory=set)
+    # The stamps of the arrays counted in n_views that the store does not hold yet.
+    # A save empties it with the sightings, so it stays as small as they are.
+    unsaved_views: set[float] = field(default_factory=set)
+    # False until a save has counted the views against the store, and again after the
+    # track absorbs a stored object, whose history the store must count with its own.
+    views_counted: bool = False
     _tree: cKDTree | None = None
     _bounds: tuple[np.ndarray, np.ndarray] | None = None
 
@@ -229,6 +237,14 @@ class Track:
         self.points = points
         self._tree = None
         self._bounds = None
+
+    def saved(self, n_views: int) -> None:
+        """The store now holds the track, with *n_views* counted against its observations."""
+        self.n_views = n_views
+        self.dirty = False
+        self.sightings.clear()
+        self.unsaved_views.clear()
+        self.views_counted = True
 
 
 @dataclass
@@ -437,8 +453,8 @@ class ObjectMemory:
             track.set_points(self._capped(voxel_downsample(np.vstack((track.points, points)), self.config.voxel_size)))
         track.labels[detection.label] = track.labels.get(detection.label, 0) + 1
         track.n_detections += 1
-        if detection.stamp not in track._view_stamps:
-            track._view_stamps.add(detection.stamp)
+        if detection.stamp not in track.unsaved_views:
+            track.unsaved_views.add(detection.stamp)
             track.n_views += 1
         track.first_seen = min(track.first_seen, detection.stamp)
         track.last_seen = max(track.last_seen, detection.stamp)
@@ -570,9 +586,12 @@ class ObjectMemory:
         for name, count in loser.labels.items():
             winner.labels[name] = winner.labels.get(name, 0) + count
         winner.n_detections += loser.n_detections
-        # An array that showed both tracks is one view of the merged object.
-        winner.n_views += loser.n_views - len(winner._view_stamps & loser._view_stamps)
-        winner._view_stamps |= loser._view_stamps
+        # An array that showed both tracks is one view of the merged object. Arrays
+        # the store already holds are compared there, by the next save.
+        winner.n_views += loser.n_views - len(winner.unsaved_views & loser.unsaved_views)
+        winner.unsaved_views |= loser.unsaved_views
+        if loser.object_id is not None:
+            winner.views_counted = False
         winner.first_seen = min(winner.first_seen, loser.first_seen)
         winner.last_seen = max(winner.last_seen, loser.last_seen)
         winner.best_view_quality = max(winner.best_view_quality, loser.best_view_quality)

@@ -213,8 +213,9 @@ answers only to its main label, the one given most often, so a sofa once called
   length 1 when read. One model per track: a vector of another model starts the sum
   again, and the next save removes the object's vector of the old model.
 - **Counts:** `n_detections` goes up by one. `n_views` goes up once per array, so
-  two detections in one camera frame are one view. Each track keeps the stamps of
-  its arrays, so two tracks that merge count an array they both saw once.
+  two detections in one camera frame are one view. An array is known by its stamp.
+  A track holds only the stamps its store rows do not have yet; the save counts the
+  rest (see [6. Save](#6-save)).
 - **Sighting:** the label, score, number of points, centre, view quality, camera pose
   and colour shares, kept until the next save writes them to `object_observation`.
 
@@ -259,6 +260,7 @@ After each round, the confirmed tracks that changed are written in one transacti
 | A merged object becomes a tombstone, `state` `merged`, pointing to the winner | `object.merged_into` |
 | A new object gets an id from a reserved block, `state` `present`, `p_exist` 0.9, `source` `perception` | `object` |
 | The box, room, label, counts, times and best view | `object`, `object_box` |
+| The views, counted against the stored sightings | `object.viewpoints` |
 | The cloud, as float32 `x`, `y`, `z` | `object_cloud` |
 | The embedding, in its model's table only, and the length of its weighted sum | `object_<model>`, `object.fingerprint_weight` |
 | The label counts | `object_label` |
@@ -267,11 +269,19 @@ After each round, the confirmed tracks that changed are written in one transacti
 | Each movable object's `on` relation, or its removal | `object_relation` |
 
 A seeded anchor that was seen again changes only its counts, times and sightings,
-never its geometry. A failed save rolls back, is logged, and is tried again next
-round, with the tracks unchanged.
+never its geometry. A failed save rolls back, also when the `COMMIT` itself fails,
+is logged, and is tried again next round, with the tracks unchanged.
+
+**Views.** The views of an object are the arrays its stored sightings hold, and
+those of every object merged into it, plus the new arrays the store does not hold
+yet. So an array two merged objects both saw counts once, and memory keeps only the
+stamps since the last save. A save adds one indexed lookup per new array to the
+stored count. The first save of a track in a process, and the first after it
+absorbed a stored object, count the stored sightings again, which also corrects a
+count an older build stored.
 
 The ids are reserved before the transaction, in their own committed one, so a crash
-can leave gaps but never gives an id twice
+or a failed save can leave gaps but never gives an id twice
 ([Object ids and tombstones](database.md#object-ids-and-tombstones)). A crash loses
 the merging since the last save, at most `merge_period_s`. On Ctrl-C, the node runs a
 last round without publishing, and ignores a second SIGINT while it does, because
@@ -284,7 +294,7 @@ from perception or are anchors, with their clouds, label counts, vectors and `on
 relations. A seeded anchor, which has no cloud, loads as a fixed track. So a
 restarted node goes on merging into the same objects and ids.
 
-Two values make a restart merge as an uninterrupted run would:
+Three things make a restart merge as an uninterrupted run would:
 
 - **The embedding's weight.** The stored vector is the direction of the weighted
   sum, and `object.fingerprint_weight` its length. The node rebuilds the same sum,
@@ -292,6 +302,8 @@ Two values make a restart merge as an uninterrupted run would:
   counts as one detection.
 - **The top surface.** An anchor the memory made gets back the height of its
   surface `object-<id>-top`, not its box top, which the things on it push up.
+- **The views.** They live in the stored sightings, so two stored objects that saw
+  the same arrays and merge after a restart count those arrays once.
 
 ## Parameters
 
@@ -399,6 +411,9 @@ explains the output.
   that disagree by more than it can split.
 - **Seeded anchors keep their seeded geometry**, even when the camera sees them
   elsewhere.
+- **An array is known by its stamp.** Two arrays with one stamp count as one view.
+  One detection topic never repeats a stamp, but a restarted simulation starts its
+  clock again, so restore the store before each simulated run, as the demo does.
 - **The values are tuned on one simulated drive.** Real camera data needs its own
   recording.
 

@@ -72,9 +72,12 @@ def save(conn: sqlite3.Connection, memory: ObjectMemory, maintenance: Maintenanc
     fixed = [t for t in memory.confirmed() if t.dirty and t.fixed]
     if not (new or changed or fixed or maintenance.merged):
         return SaveResult()
+    # Committed on its own, so a failed save leaves these ids unused. Ids are never
+    # given out twice, so that only leaves a gap.
     reservation = reserve_object_ids(conn, len(new)) if new else None
     ids = dict(zip((t.key for t in new), reservation)) if reservation else {}
     result = SaveResult(merged=list(maintenance.merged))
+    views: dict[int, int] = {}  # track key -> arrays counted against the store
     with transaction(conn):
         for loser, winner in maintenance.merged:
             tombstone_object(conn, loser, merged_into=winner)
@@ -95,21 +98,20 @@ def save(conn: sqlite3.Connection, memory: ObjectMemory, maintenance: Maintenanc
                 object_id,
                 reservation=reservation,
             )
-            _write_track(conn, track, object_id, map_id, config)
+            views[track.key] = _write_track(conn, track, object_id, map_id, config)
             result.inserted.append(object_id)
         for track in changed:
-            _write_track(conn, track, track.object_id, map_id, config)
+            views[track.key] = _write_track(conn, track, track.object_id, map_id, config)
             result.updated.append(track.object_id)
         for track in fixed:
-            _write_fixed(conn, track)
+            views[track.key] = _write_fixed(conn, track)
             result.updated.append(track.object_id)
         result.relations = _write_relations(conn, memory, map_id, ids)
     # Only after the commit: a rollback must leave the tracks as they were.
     for track in new:
         track.object_id = ids[track.key]
     for track in (*new, *changed, *fixed):
-        track.dirty = False
-        track.sightings.clear()
+        track.saved(views[track.key])
     maintenance.merged.clear()
     return result
 
@@ -120,7 +122,9 @@ def _object_box(box: Box | None, stamp: float) -> ObjectBox | None:
     return ObjectBox(center=box.center, size=box.size, rotation=box.rotation, stamp=stamp)
 
 
-def _write_track(conn: sqlite3.Connection, track: Track, object_id: int, map_id: str, config: MergeConfig) -> None:
+def _write_track(conn: sqlite3.Connection, track: Track, object_id: int, map_id: str, config: MergeConfig) -> int:
+    """Write a track the memory measured. Returns its views, counted against the store."""
+    n_views = _count_views(conn, track, object_id)
     box = track.box
     room_id = room_at(conn, map_id, box.center[0], box.center[1]) if box else None
     center = box.center if box else (0.0, 0.0, 0.0)
@@ -138,7 +142,7 @@ def _write_track(conn: sqlite3.Connection, track: Track, object_id: int, map_id:
         (track.label, room_id, *center, *size, *rotation, track.n_detections,
          track.first_seen, track.last_seen, track.last_seen, CONFIRMED_STATE, CONFIRMED_P_EXIST,
          1 if box else 0, track.last_seen if box else None, track.best_view_quality,
-         track.n_views, object_id),
+         n_views, object_id),
     )
     if box:
         conn.execute("DELETE FROM object_box WHERE id = ?", (object_id,))
@@ -173,10 +177,15 @@ def _write_track(conn: sqlite3.Connection, track: Track, object_id: int, map_id:
     _write_sightings(conn, track, object_id)
     if track.layer == ANCHOR and box:
         _write_top_surface(conn, object_id, box, box.top if track.surface_z is None else track.surface_z)
+    return n_views
 
 
-def _write_fixed(conn: sqlite3.Connection, track: Track) -> None:
-    """A seeded anchor seen again: its counters and times change, its geometry does not."""
+def _write_fixed(conn: sqlite3.Connection, track: Track) -> int:
+    """A seeded anchor seen again: its counters and times change, its geometry does not.
+
+    Returns its views, counted against the store.
+    """
+    n_views = _count_views(conn, track, track.object_id)
     conn.execute(
         """UPDATE object SET n_detections = ?, last_seen = max(last_seen, ?),
                              last_verified = max(coalesce(last_verified, 0), ?),
@@ -184,9 +193,39 @@ def _write_fixed(conn: sqlite3.Connection, track: Track) -> None:
                              revision = revision + 1
            WHERE id = ?""",
         (track.n_detections, track.last_seen, track.last_seen, track.best_view_quality,
-         track.n_views, track.object_id),
+         n_views, track.object_id),
     )
     _write_sightings(conn, track, track.object_id)
+    return n_views
+
+
+def _count_views(conn: sqlite3.Connection, track: Track, object_id: int) -> int:
+    """How many arrays showed the object: those its stored observations hold, and the new ones.
+
+    Its observations are its own and those of every object merged into it, and an
+    array is known by its stamp. Called before the track's sightings are written, so
+    a new array adds one unless the store already holds its stamp. Once a save has
+    counted a track, the next ones start from the stored count, so a save costs one
+    indexed lookup per new array. The first save in a process, and the first after
+    the track absorbed a stored object, count the stored observations again.
+    """
+    family = [row[0] for row in conn.execute(
+        """WITH RECURSIVE family (id) AS (
+               SELECT ? UNION SELECT o.id FROM object AS o JOIN family AS f ON o.merged_into = f.id)
+           SELECT id FROM family""",
+        (object_id,),
+    )]
+    marks = ", ".join("?" * len(family))
+    if track.views_counted:
+        stored = conn.execute("SELECT viewpoints FROM object WHERE id = ?", (object_id,)).fetchone()[0]
+    else:
+        stored = conn.execute(
+            f"SELECT count(DISTINCT ts) FROM object_observation WHERE object_id IN ({marks})", family
+        ).fetchone()[0]
+    held = f"SELECT 1 FROM object_observation WHERE object_id IN ({marks}) AND ts = ? LIMIT 1"
+    return stored + sum(
+        1 for stamp in track.unsaved_views if conn.execute(held, (*family, stamp)).fetchone() is None
+    )
 
 
 def _delete_other_vectors(conn: sqlite3.Connection, object_id: int, model: str) -> None:
