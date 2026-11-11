@@ -285,6 +285,28 @@ def stored_views(store, object_id):
     return store.execute("SELECT viewpoints FROM object WHERE id = ?", (object_id,)).fetchone()[0]
 
 
+def deny_commit(action, operation, *args):
+    """An authorizer that fails every COMMIT and leaves the transaction open, as SQLITE_BUSY does."""
+    if action == sqlite3.SQLITE_TRANSACTION and operation == "COMMIT":
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+OLD_MODEL = "aaa_b16"  # sorts before MODEL, so a vector left behind would load first
+
+
+def add_old_model_table(store):
+    sql = store.execute(f"SELECT sql FROM sqlite_master WHERE name = 'object_{MODEL}'").fetchone()[0]
+    store.execute(sql.replace(f"object_{MODEL}", f"object_{OLD_MODEL}", 1))
+
+
+def vector_rows(store, object_id):
+    """How many vectors the object has in each model's table."""
+    return {model: store.execute(f"SELECT count(*) FROM object_{model} WHERE object_id = ?",
+                                 (object_id,)).fetchone()[0]
+            for model in (OLD_MODEL, MODEL)}
+
+
 def test_a_save_whose_commit_fails_is_rolled_back_and_the_retry_writes_once(store):
     memory = ObjectMemory(CONFIG)
     cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
@@ -293,12 +315,6 @@ def test_a_save_whose_commit_fails_is_rolled_back_and_the_retry_writes_once(stor
         memory.add([seen(cup, stamp=stamp)])
     maintenance = Maintenance(merged=memory.maintain(now=4.0).merged)
     [track] = memory.tracks
-
-    def deny_commit(action, operation, *args):
-        # SQLite keeps the transaction open after a failed COMMIT, as after SQLITE_BUSY.
-        if action == sqlite3.SQLITE_TRANSACTION and operation == "COMMIT":
-            return sqlite3.SQLITE_DENY
-        return sqlite3.SQLITE_OK
 
     store.set_authorizer(deny_commit)
     with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
@@ -316,24 +332,45 @@ def test_a_save_whose_commit_fails_is_rolled_back_and_the_retry_writes_once(stor
 
 def test_a_model_change_keeps_only_the_vector_of_the_new_model(store, cup_vector):
     """After a restart the object has the new model's vector and weight, not the old vector."""
-    # A second model whose name sorts first, so a vector left behind would load first.
-    sql = store.execute("SELECT sql FROM sqlite_master WHERE name = 'object_clip_vit_b16'").fetchone()[0]
-    store.execute(sql.replace("object_clip_vit_b16", "object_aaa_b16", 1))
+    add_old_model_table(store)
     old_vector = unit(np.random.default_rng(7).normal(size=512))
     memory = ObjectMemory(CONFIG)
     cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
     [object_id] = run(memory, store, [1.0, 2.0], lambda t: [
-        replace(seen(cup, stamp=t, embedding=embedding_near(old_vector, int(t))), model="aaa_b16")]).inserted
-    assert store.execute("SELECT count(*) FROM object_aaa_b16 WHERE object_id = ?", (object_id,)).fetchone()[0] == 1
+        replace(seen(cup, stamp=t, embedding=embedding_near(old_vector, int(t))), model=OLD_MODEL)]).inserted
+    assert vector_rows(store, object_id) == {OLD_MODEL: 1, MODEL: 0}
 
     run(memory, store, [3.0, 4.0], lambda t: [
         seen(cup, stamp=t, score=0.4, embedding=embedding_near(cup_vector, int(t)))])
     [track] = memory.tracks
     assert track.model == MODEL
-    assert store.execute("SELECT count(*) FROM object_aaa_b16 WHERE object_id = ?", (object_id,)).fetchone()[0] == 0
+    assert vector_rows(store, object_id) == {OLD_MODEL: 0, MODEL: 1}
     [loaded] = load_tracks(store, MAP, CONFIG)
     assert loaded.model == MODEL
     assert loaded.embedding_sum == pytest.approx(track.embedding_sum, abs=1e-5)
+
+
+def test_a_model_change_whose_save_fails_keeps_the_old_vector_until_the_retry(store, cup_vector):
+    """Both models' tables roll back with the save, so the object never loses its vector."""
+    add_old_model_table(store)
+    old_vector = unit(np.random.default_rng(7).normal(size=512))
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    [object_id] = run(memory, store, [1.0, 2.0], lambda t: [
+        replace(seen(cup, stamp=t, embedding=embedding_near(old_vector, int(t))), model=OLD_MODEL)]).inserted
+    for stamp in (3.0, 4.0):
+        memory.add([seen(cup, stamp=stamp, score=0.4, embedding=embedding_near(cup_vector, int(stamp)))])
+    maintenance = Maintenance(merged=memory.maintain(now=4.0).merged)
+
+    store.set_authorizer(deny_commit)
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        save(store, memory, maintenance, map_id=MAP)
+    store.set_authorizer(None)
+    assert vector_rows(store, object_id) == {OLD_MODEL: 1, MODEL: 0}
+    assert [t.model for t in load_tracks(store, MAP, CONFIG)] == [OLD_MODEL]
+
+    save(store, memory, maintenance, map_id=MAP)
+    assert vector_rows(store, object_id) == {OLD_MODEL: 0, MODEL: 1}
 
 
 def test_stored_objects_that_saw_the_same_arrays_count_them_once_after_a_restart(store):
@@ -357,6 +394,50 @@ def test_stored_objects_that_saw_the_same_arrays_count_them_once_after_a_restart
     assert loaded.n_views == 4
 
 
+def test_three_objects_merged_over_two_rounds_count_each_array_once(store):
+    """A merges B, which had merged C, so A's views include the arrays only C saw."""
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    arrays = {0.0: (1.0, 2.0, 3.0, 4.0, 5.0), 0.5: (4.0, 6.0), 1.0: (6.0, 7.0)}  # x offset -> stamps
+    run(memory, store, [float(t) for t in range(1, 8)], lambda t: [
+        seen(cup + [dx, 0.0, 0.0], stamp=t) for dx, stamps in arrays.items() if t in stamps])
+    # Ids follow the order the tracks were made in, so a is the oldest and c the newest.
+    a, b, c = sorted(memory.tracks, key=lambda t: t.object_id)
+    assert [stored_views(store, t.object_id) for t in (a, b, c)] == [5, 2, 2]
+
+    c.set_points(b.points + 0.003)  # same detection count: the older b keeps its id
+    assert run(memory, store, [8.0], lambda t: []).merged == [(c.object_id, b.object_id)]
+    assert stored_views(store, b.object_id) == 3
+
+    b.set_points(a.points + 0.003)  # a has more detections, so it keeps its id
+    assert run(memory, store, [9.0], lambda t: []).merged == [(b.object_id, a.object_id)]
+    assert memory.tracks == [a]
+    assert stored_views(store, a.object_id) == a.n_views == 7
+    [loaded] = load_tracks(store, MAP, CONFIG)
+    assert loaded.n_views == 7
+
+
+def test_a_seeded_anchor_counts_its_views_against_its_stored_sightings(store):
+    with transaction(store):
+        store.execute(
+            """INSERT INTO object (id, map_id, label, source, layer, state, p_exist,
+                                   center_x, center_y, center_z, size_x, size_y, size_z,
+                                   first_seen, last_seen)
+               VALUES (5, ?, 'table', 'map', 'anchor', 'present', 0.95, 2.0, 0.0, 0.37, 1.2, 0.8, 0.75, 0, 0)""",
+            (MAP,),
+        )
+    memory = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
+    run(memory, store, [1.0, 2.0], lambda t: [seen(table_points(int(t)), label="table", stamp=t)])
+    assert stored_views(store, 5) == memory.tracks[0].n_views == 2
+
+    # Array 2 again, as a replay of the same recording would send it, and a new array 3.
+    restarted = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
+    run(restarted, store, [2.0, 3.0], lambda t: [seen(table_points(int(t)), label="table", stamp=t)])
+    [anchor] = restarted.tracks
+    assert anchor.fixed
+    assert stored_views(store, 5) == anchor.n_views == 3
+
+
 def test_the_first_save_after_a_restart_counts_the_stored_views_again(store):
     """A count an older build stored too high is replaced by the count of the stored arrays."""
     memory = ObjectMemory(CONFIG)
@@ -367,6 +448,29 @@ def test_the_first_save_after_a_restart_counts_the_stored_views_again(store):
     restarted = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
     run(restarted, store, [3.0], lambda t: [seen(cup, stamp=t)])
     assert stored_views(store, object_id) == restarted.tracks[0].n_views == 3
+
+
+def test_a_failed_save_keeps_the_views_it_has_to_count_for_the_retry(store):
+    """The retry of a failed first save after a restart still recounts, and still has the new arrays."""
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    [object_id] = run(memory, store, [1.0, 2.0], lambda t: [seen(cup, stamp=t)]).inserted
+    with transaction(store):
+        store.execute("UPDATE object SET viewpoints = 9 WHERE id = ?", (object_id,))  # an older build's count
+    restarted = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
+    for stamp in (3.0, 4.0):
+        restarted.add([seen(cup, stamp=stamp)])
+    maintenance = Maintenance(merged=restarted.maintain(now=4.0).merged)
+    [track] = restarted.tracks
+
+    store.set_authorizer(deny_commit)
+    with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+        save(store, restarted, maintenance, map_id=MAP)
+    store.set_authorizer(None)
+    assert (track.unsaved_views, track.views_counted) == ({3.0, 4.0}, False)
+
+    save(store, restarted, maintenance, map_id=MAP)
+    assert stored_views(store, object_id) == track.n_views == 4
 
 
 def test_an_array_the_store_already_holds_is_not_counted_again(store):
