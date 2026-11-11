@@ -2,10 +2,11 @@
 
 import json
 import sqlite3
+from dataclasses import replace
 
 import numpy as np
 import pytest
-from test_object_memory import blob, embedding_near, seen, unit
+from test_object_memory import MODEL, blob, embedding_near, seen, unit
 
 from walkie_database.db import connect, transaction
 from walkie_database.migrate import migrate
@@ -278,3 +279,25 @@ def test_a_seeded_anchor_loads_as_a_fixed_track_and_keeps_its_geometry(store):
     row = store.execute("SELECT center_x, size_x, n_detections, last_verified FROM object WHERE id = 5").fetchone()
     # A seeded row starts with one detection, the survey.
     assert tuple(row) == (2.0, 1.2, 2, 1.0)
+
+
+def test_a_model_change_keeps_only_the_vector_of_the_new_model(store, cup_vector):
+    """After a restart the object has the new model's vector and weight, not the old vector."""
+    # A second model whose name sorts first, so a vector left behind would load first.
+    sql = store.execute("SELECT sql FROM sqlite_master WHERE name = 'object_clip_vit_b16'").fetchone()[0]
+    store.execute(sql.replace("object_clip_vit_b16", "object_aaa_b16", 1))
+    old_vector = unit(np.random.default_rng(7).normal(size=512))
+    memory = ObjectMemory(CONFIG)
+    cup = blob((1.0, 0.5, 0.8), (0.08, 0.08, 0.1))
+    [object_id] = run(memory, store, [1.0, 2.0], lambda t: [
+        replace(seen(cup, stamp=t, embedding=embedding_near(old_vector, int(t))), model="aaa_b16")]).inserted
+    assert store.execute("SELECT count(*) FROM object_aaa_b16 WHERE object_id = ?", (object_id,)).fetchone()[0] == 1
+
+    run(memory, store, [3.0, 4.0], lambda t: [
+        seen(cup, stamp=t, score=0.4, embedding=embedding_near(cup_vector, int(t)))])
+    [track] = memory.tracks
+    assert track.model == MODEL
+    assert store.execute("SELECT count(*) FROM object_aaa_b16 WHERE object_id = ?", (object_id,)).fetchone()[0] == 0
+    [loaded] = load_tracks(store, MAP, CONFIG)
+    assert loaded.model == MODEL
+    assert loaded.embedding_sum == pytest.approx(track.embedding_sum, abs=1e-5)

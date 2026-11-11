@@ -211,7 +211,7 @@ answers only to its main label, the one given most often, so a sofa once called
   highest count.
 - **Embedding:** a sum of the vectors, weighted by the detector's score, scaled to
   length 1 when read. One model per track: a vector of another model starts the sum
-  again.
+  again, and the next save removes the object's vector of the old model.
 - **Counts:** `n_detections` goes up by one. `n_views` goes up once per array, so
   two detections in one camera frame are one view. Each track keeps the stamps of
   its arrays, so two tracks that merge count an array they both saw once.
@@ -260,7 +260,7 @@ After each round, the confirmed tracks that changed are written in one transacti
 | A new object gets an id from a reserved block, `state` `present`, `p_exist` 0.9, `source` `perception` | `object` |
 | The box, room, label, counts, times and best view | `object`, `object_box` |
 | The cloud, as float32 `x`, `y`, `z` | `object_cloud` |
-| The embedding, one row per model, and the length of its weighted sum | `object_<model>`, `object.fingerprint_weight` |
+| The embedding, in its model's table only, and the length of its weighted sum | `object_<model>`, `object.fingerprint_weight` |
 | The label counts | `object_label` |
 | The sightings since the last save | `object_observation` |
 | An anchor's top surface, key `object-<id>-top` | `surface` |

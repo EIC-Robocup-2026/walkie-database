@@ -157,6 +157,9 @@ def _write_track(conn: sqlite3.Connection, track: Track, object_id: int, map_id:
     embedding = track.embedding
     if embedding is not None:
         write_object_vector(conn, object_id, track.model, embedding)
+        # A track holds one model's mean. The vector of a model it left would load in
+        # place of this one after a restart, with this one's weight.
+        _delete_other_vectors(conn, object_id, track.model)
         # The stored vector is the direction of the weighted sum, and this its length,
         # so load_tracks rebuilds the same sum and later vectors move it as before.
         conn.execute("UPDATE object SET fingerprint_weight = ? WHERE id = ?",
@@ -184,6 +187,14 @@ def _write_fixed(conn: sqlite3.Connection, track: Track) -> None:
          track.n_views, track.object_id),
     )
     _write_sightings(conn, track, track.object_id)
+
+
+def _delete_other_vectors(conn: sqlite3.Connection, object_id: int, model: str) -> None:
+    """Remove the object's vectors of every model but *model*, inside the caller's transaction."""
+    for other in vector_tables(conn, OBJECT).lengths:
+        if other != model:
+            # The name comes from the schema's own vec0 tables, so it is safe in SQL text.
+            conn.execute(f"DELETE FROM {OBJECT}_{other} WHERE object_id = ?", (object_id,))
 
 
 def _write_sightings(conn: sqlite3.Connection, track: Track, object_id: int) -> None:
