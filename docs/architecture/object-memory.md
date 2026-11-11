@@ -192,16 +192,17 @@ other layer.
 
 **Names.** A movable track answers to every label it was ever given, because the
 detector calls a small object `cup` from one view and `bowl` from another. An anchor
-answers only to its main label, the one given most often, so a sofa once called
-`table` does not pull in the coffee table next to it.
+answers only to its main label, the one given most often, so a sofa that the
+detector sometimes calls `table` does not also pull in a table next to it.
 
 ??? info "Why these rules: what the Chula drive showed"
     Vision sends a vector with about 5% of detections, so most matches run on
     labels. With the proposed rule, where another label never matched, each object
     that was found split into 2.1 tracks on average, and 5 tracks stood for nothing.
-    Localization drifted by up to 0.3 m during the drive, so views of one object
-    landed 0.10 to 0.20 m apart, which set `match_distance`. Letting furniture join
-    under another name made a table swallow a stool, so anchors keep strict names.
+    AMCL's correction of the odometry, measured at the robot, was about 0.3 m for
+    most of the drive and peaked near 0.5 m. Views of one object landed 0.10 to
+    0.20 m apart, which set `match_distance`. Letting furniture join under another
+    name made a table swallow a stool, so without vectors, anchors keep strict names.
     The numbers after the change are in
     [ADR-0025](decisions/0025-merge-by-overlap-and-label.md).
 
@@ -416,9 +417,10 @@ explains the output.
 - **Top surfaces only.** A shelf's inner levels are not found, so an object inside a
   shelf gets no relation, and the memory never stores `inside`.
 - **The detector's labels set the layers.** A partition wall called a chair becomes
-  an anchor, and a sofa called a table merges with the coffee table next to it.
-  Asking vision for `wall`, `partition` and `door`, which the memory drops, avoids
-  the first. Seeding the furniture avoids the second
+  an anchor, and a strip of the sofa that the detector calls a table becomes a table
+  anchor of its own. Asking vision for `wall` and `door`, which the memory drops
+  (`ignore_labels`), avoids the first; a `partition` label would also need adding to
+  `ignore_labels`. Seeding the furniture avoids the second
   ([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)).
 - **Localization error becomes merging error.** Two objects closer than
   `match_distance` with a shared label can merge, and an object seen from two poses

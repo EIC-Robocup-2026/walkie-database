@@ -64,9 +64,9 @@ DEFAULT_IGNORED_LABELS = ("wall", "floor", "ceiling", "door", "window")
 @dataclass(frozen=True)
 class MergeConfig:
     voxel_size: float = 0.025  # metres, the grid every cloud is downsampled to
-    # A point this close to a track's point overlaps it. It covers the localization
-    # error between two visits: map -> odom moved up to 0.3 m in the Chula drive, and
-    # views of one object landed 0.10-0.20 m apart.
+    # A point this close to a track's point overlaps it. It covers the error between
+    # two visits: in the Chula drive, views of one object landed 0.10-0.20 m apart,
+    # while AMCL's correction of the odometry, measured at the robot, peaked near 0.5 m.
     match_distance: float = 0.10
     match_threshold: float = 1.1  # spatial plus visual similarity needed to join
     min_spatial: float = 0.1  # below this a detection never joins, however alike
@@ -372,8 +372,8 @@ def _is_called(track: Track, label: str) -> bool:
 
     A movable track answers to every label it was ever given, since the detector
     names a small object differently from some views. An anchor answers only to its
-    main label: a sofa seen once as a table must not pull in the coffee table next
-    to it, and a table seen once as a chair must not pull in the stools.
+    main label: a sofa sometimes seen as a table must not pull in a table next to
+    it, and a table seen once as a chair must not pull in the stools.
     """
     return label == track.label if track.layer == ANCHOR else label in track.labels
 
@@ -585,7 +585,8 @@ class ObjectMemory:
         """Whether one of two anchor tracks is seeded and holds most of the other's points.
 
         Only a seeded anchor's box is trusted for this. A box the memory measured
-        can be wrong, as when a sofa and a coffee table merge into one.
+        can be wrong, as when stray points of a sofa reach over the coffee table
+        in front of it.
         """
         fixed, other = (a, b) if a.fixed else (b, a)
         if fixed.box is None or len(other.points) == 0:

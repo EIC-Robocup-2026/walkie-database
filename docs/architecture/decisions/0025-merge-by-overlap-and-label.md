@@ -17,8 +17,10 @@ problems with that rule:
 - **The detector renames objects.** It calls a small object `cup` from one view
   and `bowl` from another, or a mug a cup. With strict labels, each object that
   was found became 2.1 tracks on average, and 5 tracks stood for nothing real.
-- **Localization drifts.** `map -> odom` moved by up to 0.3 m during the drive,
-  so the views of one object landed 0.10 to 0.20 m apart.
+- **The map pose shifts.** AMCL keeps correcting the odometry's drift. Measured
+  at the robot, its correction since the start of the drive was about 0.3 m for
+  most of it and peaked near 0.5 m. The views of one object landed 0.10 to
+  0.20 m apart.
 
 Furniture is different. Stools stand within a few centimetres of a table, and
 the detector also renames furniture: from some views it calls the sofa `table`,

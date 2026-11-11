@@ -5,12 +5,13 @@
 
 **Context**
 
-A seeded anchor is a fixed track with a box and no points. A detection matches
-it only under its own label
-([ADR-0025](/architecture/decisions/0025-merge-by-overlap-and-label.md)), and
-anchors of different labels never merge. The detector names furniture
-inconsistently. In the Chula world it calls a strip of the sofa a table, in
-every pass. Seeding the sofa then leaves a second anchor, a "table" inside the
+A seeded anchor is a fixed track with a box and no points. Its box counts only
+for its own label, so neither a detection nor an anchor track of another label
+joins it, with or without vectors. (Between unseeded anchors,
+[ADR-0025](/architecture/decisions/0025-merge-by-overlap-and-label.md) lets
+furniture of another label join on vectors from the same model.) The detector
+names furniture inconsistently. In the Chula world it calls a strip of the sofa
+a table, in every pass. Seeding the sofa then leaves a second anchor, a "table" inside the
 sofa's box, and objects on the sofa can be stated on either one.
 
 Furniture does not share its space. An anchor track that lies inside a seeded
@@ -24,7 +25,8 @@ At upkeep, an anchor track merges into a seeded anchor when at least
 its label, and it counts the absorbed sightings under its own label.
 
 Only a seeded box is trusted for this. A box the memory measured can be wrong,
-as when a sofa and a coffee table merge into one. Movable objects are never
+as when stray points of the sofa reach over the coffee table in front of it, which
+the detector never sees. Movable objects are never
 absorbed, since they stand on furniture and inside its box.
 
 **Consequences**

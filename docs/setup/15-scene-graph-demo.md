@@ -187,9 +187,10 @@ its top, which the truth file does not score. The two objects missed are on the
 shelf's inner level and on the bar.
 
 Without `--seed`, the furniture splits into 1.22 anchors each and 7 of the 8 `on`
-relations are right, with none wrong. The sofa and the coffee table merge into one
-anchor, a strip of the sofa becomes an anchor of its own called a table, and the mug
-on the coffee table gets no `on` relation.
+relations are right, with none wrong. The detector never sees the coffee table, so
+the mug on it gets no `on` relation. The score still counts the coffee table found,
+because stray points of the sofa stretch the sofa's anchor over its footprint. A
+strip of the sofa that the detector calls a table becomes an anchor of its own.
 
 To score another world, write its own truth file: a JSON object of named boxes, each
 with `kind` (`furniture` or `object`), `min` and `max` in the map frame.
