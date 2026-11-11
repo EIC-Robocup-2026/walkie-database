@@ -454,7 +454,8 @@ def test_the_store_status_in_memory_mode(node, store, folder):
     assert response.clock_kind == "wall"
     assert response.schema_version >= 6
     assert response.map_valid
-    assert not response.ingest_enabled and not response.captions_enabled
+    # Memory mode merges arrays into objects; captions are not written yet.
+    assert response.ingest_enabled and not response.captions_enabled
     assert list(response.object_embedding_models) == [MODEL]
     assert (response.arrays_received, response.arrays_rejected) == (0, 0)
 

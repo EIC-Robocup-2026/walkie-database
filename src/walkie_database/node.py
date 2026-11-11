@@ -40,10 +40,15 @@ processes read through its topics and services:
     The store's objects as JSON, published once when the anchors are stamped. Only
     memory mode publishes it. Transient local, so a late subscriber still gets it.
 
+``~/objects/markers`` (``visualization_msgs/MarkerArray``) and ``~/objects/cloud`` (``sensor_msgs/PointCloud2``)
+    The object memory's confirmed objects in the map frame: a box and a label each,
+    the ``on`` relations, and the merged points. Only memory mode publishes them,
+    after each round of upkeep that changed something. Transient local (ADR-0013).
+
 ``~/set_object_state``, ``~/report_sighting``, ``~/arena_reset``,
 ``~/submit_detections`` and ``~/describe_object``
-    Their types are final, and they answer NOT_READY until the object memory
-    exists. They read nothing and keep nothing.
+    Their types are final, and they answer NOT_READY until they are built. They
+    read nothing and keep nothing.
 
 The node keeps no session state in memory: it is all in the file.
 
@@ -58,9 +63,17 @@ must match them and ``use_sim_time``. A mismatch stops the start before any serv
 exists. A seeded store's anchors are stamped once, on the first clock sample.
 
 Memory mode also takes the arrays on the ``objects_topic`` parameter's topic. It
-checks and counts each one, and keeps only the newest valid one. No array creates an
-object (ADR-0019). Without memory mode there is no subscription, and the services
-that need a map answer NOT_READY.
+checks and counts each one. A valid array's points go to the map frame with TF at
+the array's exact stamp, and the object memory merges them into objects
+(``walkie_database.object_memory``). An array with no transform at its stamp is
+counted and dropped. Every ``merge_period_s`` the memory denoises, boxes and
+deduplicates its objects, measures the anchors' top surfaces, and writes the
+confirmed objects and their ``on`` relations in one transaction
+(``walkie_database.object_memory_store``). ``confirm_views``, ``anchor_labels``,
+``ignore_labels``, ``match_distance`` and ``other_label_similarity`` tune the
+merging (docs/architecture/object-memory.md#parameters). On shutdown it saves
+once more. Without memory mode there is no subscription, and the services that
+need a map answer NOT_READY.
 
 Every start commits a new ``store_id``. Timestamps come from the node's clock, so
 in a simulation they are sim time.
@@ -69,6 +82,7 @@ in a simulation they are sim time.
 from __future__ import annotations
 
 import functools
+import signal
 import sqlite3
 import uuid
 from contextlib import closing
@@ -82,7 +96,9 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rosgraph_msgs.msg import Clock
+from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
+from visualization_msgs.msg import MarkerArray
 from walkie_database_msgs.msg import (
     Fact,
     ModelInfo,
@@ -114,12 +130,22 @@ from walkie_database_msgs.srv import (
 )
 from walkie_vision_msgs.msg import ObjectDetectionArray
 
-from walkie_database import people
+from walkie_database import object_memory_store, people
 from walkie_database.db import connect, transaction
 from walkie_database.events import NewEvent
 from walkie_database.geometry import FramePose
 from walkie_database.ingress import ObservationSlot, check_observation
 from walkie_database.localize import FrameSource, localize
+from walkie_database.object_intake import map_detections
+from walkie_database.object_markers import cloud_message as memory_cloud_message
+from walkie_database.object_markers import marker_array
+from walkie_database.object_memory import (
+    DEFAULT_ANCHOR_LABELS,
+    DEFAULT_IGNORED_LABELS,
+    Maintenance,
+    MergeConfig,
+    ObjectMemory,
+)
 from walkie_database.map_config import (
     ROS_SIM,
     WALL,
@@ -195,6 +221,7 @@ _SNAPSHOT_QOS = QoSProfile(
 )
 _REJECTED_LOG_PERIOD_S = 5.0
 _MAX_STATUS_MESSAGE = 512
+DEFAULT_MERGE_PERIOD_S = 2.0
 
 
 class _ClockNotReady(ValueError):
@@ -256,6 +283,14 @@ class DatabaseNode(Node):
         # The only way a query handler reaches the store (ADR-0021).
         self._objects: ObjectRepository | None = None
         self._snapshot_publisher = None
+        # The object memory, in memory mode only (walkie_database.object_memory).
+        self._memory: ObjectMemory | None = None
+        # Merges of stored objects that the next save must write as tombstones.
+        self._maintenance = Maintenance()
+        self._relations: dict[int, int] = {}  # object id -> the anchor it rests on
+        self._markers_publisher = None
+        self._cloud_publisher = None
+        self.tf_misses = 0
         try:
             self._start()
         except BaseException:
@@ -351,10 +386,94 @@ class DatabaseNode(Node):
             self._snapshot_publisher = self.create_publisher(
                 String, "~/objects/snapshot", _SNAPSHOT_QOS
             )
+            self._start_memory()
             if not self._sim_time:
                 self._publish_snapshot(self._now())
+                self._publish_objects(self._now())
         else:
             self._objects = ObjectRepository(self.conn)
+
+    def _start_memory(self) -> None:
+        """Load the map's objects into the object memory, and start its upkeep and topics."""
+        period = self.declare_parameter("merge_period_s", DEFAULT_MERGE_PERIOD_S, _READ_ONLY).value
+        confirm = self.declare_parameter("confirm_views", MergeConfig.confirm_views, _READ_ONLY).value
+        anchors = self.declare_parameter("anchor_labels", list(DEFAULT_ANCHOR_LABELS), _READ_ONLY).value
+        ignored = self.declare_parameter("ignore_labels", list(DEFAULT_IGNORED_LABELS), _READ_ONLY).value
+        distance = self.declare_parameter("match_distance", MergeConfig.match_distance, _READ_ONLY).value
+        other = self.declare_parameter(
+            "other_label_similarity", MergeConfig.other_label_similarity, _READ_ONLY
+        ).value
+        if not period > 0 or confirm < 1:
+            raise MapGateError(
+                f"merge_period_s must be above 0 and confirm_views at least 1, not {period} and {confirm}."
+            )
+        if not distance > 0 or not 0.0 <= other <= 1.0:
+            raise MapGateError(
+                f"match_distance must be above 0 and other_label_similarity in [0, 1], not {distance} and {other}."
+            )
+        config = MergeConfig(
+            confirm_views=int(confirm),
+            match_distance=float(distance),
+            other_label_similarity=float(other),
+            anchor_labels=tuple(anchors),
+            ignore_labels=tuple(ignored),
+        )
+        tracks = object_memory_store.load_tracks(self.conn, self._map_id_parameter(), config)
+        self._memory = ObjectMemory(config, tracks)
+        self._relations = object_memory_store.load_relations(self.conn, self._map_id_parameter())
+        self.get_logger().info(f"The object memory starts with {_count(len(tracks), 'object')}.")
+        self._markers_publisher = self.create_publisher(MarkerArray, "~/objects/markers", _SNAPSHOT_QOS)
+        self._cloud_publisher = self.create_publisher(PointCloud2, "~/objects/cloud", _SNAPSHOT_QOS)
+        self.create_timer(float(period), self._maintain_objects)
+
+    def _ingest(self, message: ObjectDetectionArray) -> None:
+        """Merge a checked array's detections, in the map frame at the array's stamp."""
+        if not message.detections:
+            return
+        header = message.header
+        found = self._frames.lookup(self._map_frame, header.frame_id, rclpy.time.Time.from_msg(header.stamp))
+        if found is None:
+            self.tf_misses += 1
+            self.get_logger().warning(
+                f"No transform from {header.frame_id} to {self._map_frame} at an array's stamp, "
+                f"so it was not merged ({self.tf_misses} so far).",
+                throttle_duration_sec=_REJECTED_LOG_PERIOD_S,
+            )
+            return
+        self._memory.add(map_detections(message, found))
+
+    def _maintain_objects(self, publish: bool = True) -> None:
+        """One round of upkeep: denoise, drop ghosts, merge, save, and publish unless told not to."""
+        try:
+            now = self._now()
+        except _ClockNotReady:
+            return
+        result = self._memory.maintain(now)
+        self._maintenance.merged.extend(result.merged)
+        try:
+            saved = object_memory_store.save(
+                self.conn, self._memory, self._maintenance, map_id=self._map_id_parameter()
+            )
+        except (sqlite3.Error, ValueError, people.Refused) as e:
+            self.get_logger().error(
+                f"Could not save the object memory, and will try again: {e}",
+                throttle_duration_sec=_REJECTED_LOG_PERIOD_S,
+            )
+            return
+        if saved.inserted or saved.updated or saved.merged:
+            self._relations = {src: dst for src, (dst, _) in saved.relations.items()}
+            if publish:
+                self._publish_objects(now)
+
+    def _publish_objects(self, now: float) -> None:
+        if self._markers_publisher is None or now <= 0:
+            return
+        stamp = _time(now, "the node's clock has the time")
+        tracks = self._memory.confirmed()
+        self._markers_publisher.publish(
+            marker_array(tracks, self._relations, frame_id=self._map_frame, stamp=stamp)
+        )
+        self._cloud_publisher.publish(memory_cloud_message(tracks, frame_id=self._map_frame, stamp=stamp))
 
     def _read_thing_cosines(self) -> dict[str, float]:
         """Per model, the cosine that stands in for a thing's words. A value that cannot be one stops the start."""
@@ -419,6 +538,8 @@ class DatabaseNode(Node):
             self.get_logger().warning(
                 f"Refused an array: {problem}", throttle_duration_sec=_REJECTED_LOG_PERIOD_S
             )
+            return
+        self._ingest(message)
 
     def _read_gate_inputs(self, map_folder: str) -> MapFolder:
         """Check what memory mode needs, before anything is written beside the store."""
@@ -492,6 +613,7 @@ class DatabaseNode(Node):
         self._first_clock = None
         if self.memory_enabled:
             self._publish_snapshot(message.clock.sec + message.clock.nanosec / 1e9)
+            self._publish_objects(message.clock.sec + message.clock.nanosec / 1e9)
 
     def _stamp_seeded_anchors(self, now: float) -> None:
         """Stamp the anchors and clear the flag together, in one transaction."""
@@ -655,8 +777,8 @@ class DatabaseNode(Node):
         response.clock_kind = ROS_SIM if self._sim_time else WALL
         response.schema_version = status.schema_version
         response.map_valid = self.memory_enabled
-        # Nothing feeds the object memory, and no caption is made, in this stage.
-        response.ingest_enabled = False
+        # Memory mode merges the arrays into objects. No caption is made yet.
+        response.ingest_enabled = self.memory_enabled
         response.captions_enabled = False
         response.object_embedding_models = status.models
         if self._observations is not None:
@@ -860,6 +982,11 @@ class DatabaseNode(Node):
         return response
 
     def destroy_node(self) -> None:
+        if self._memory is not None and self.conn is not None:
+            # Save the merges since the timer's last round (ADR-0011). No publish: after
+            # Ctrl-C the context may already be shut down.
+            self._maintain_objects(publish=False)
+            self._memory = None
         if self._frames is not None:
             self._frames.close()
             self._frames = None
@@ -955,8 +1082,26 @@ def main() -> None:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # One Ctrl-C can arrive twice: `pixi run` forwards SIGINT to its child, and the
+        # terminal sends it to the child as well. A second KeyboardInterrupt here would
+        # cut the object memory's final save short, so the cleanup ignores SIGINT.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.destroy_node()
+        _shutdown_rclpy()
+
+
+def _shutdown_rclpy() -> None:
+    """Shut rclpy down, unless its signal handler has already done so.
+
+    After Ctrl-C, rclpy's signal handler shuts the context down from its own thread.
+    When that lands between try_shutdown's check and its call, try_shutdown raises
+    RCLError, although the context is shut down as wanted.
+    """
+    try:
         rclpy.try_shutdown()
+    except Exception:
+        if rclpy.ok():
+            raise
 
 
 if __name__ == "__main__":
