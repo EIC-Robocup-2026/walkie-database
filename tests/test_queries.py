@@ -755,16 +755,45 @@ def test_an_anchor_returns_every_surface_with_an_honest_flag(store, furniture):
     assert repo.get_object(furniture["cup"], include_cloud=False, now=NOW).surfaces == []
 
 
+def place_of(store, object_id):
+    record = store.repository().get_object(object_id, include_cloud=False, now=NOW).record
+    return record.place, record.place_anchor_id
+
+
 def test_the_place_is_the_strongest_stored_relation(store, furniture):
-    repo = store.repository()
+    assert place_of(store, furniture["cup"]) == ("table_top", furniture["table"])
+    assert place_of(store, furniture["plate"]) == ("cabinet", furniture["cabinet"])
+    assert place_of(store, furniture["table"]) == ("", 0)
 
-    def place(name):
-        record = repo.get_object(furniture[name], include_cloud=False, now=NOW).record
-        return record.place, record.place_anchor_id
 
-    assert place("cup") == ("table_top", furniture["table"])
-    assert place("plate") == ("cabinet", furniture["cabinet"])
-    assert place("table") == ("", 0)
+def test_the_place_anchor_follows_the_strongest_relation_then_the_newest(store):
+    first = store.add("table", layer="anchor", key="first_table", size=(1.0, 0.5, 0.8))
+    second = store.add("table", layer="anchor", key="second_table", size=(1.0, 0.5, 0.8))
+    first_top = store.surface(first, "first_top")
+    second_top = store.surface(second, "second_top")
+    cup = store.add("cup")
+
+    store.on(cup, first, first_top, weight=0.5)
+    store.on(cup, second, second_top, weight=0.9)
+    assert place_of(store, cup) == ("second_top", second)
+
+    store.on(cup, first, first_top, weight=0.9, now=NOW + 1)
+    assert place_of(store, cup) == ("first_top", first)
+
+
+def test_a_relation_to_a_merged_anchor_gives_no_place_until_the_winner_is_named(store):
+    loser = store.add("table", layer="anchor", key="old_table", size=(1.0, 0.5, 0.8))
+    winner = store.add("table", layer="anchor", key="table", size=(1.0, 0.5, 0.8))
+    loser_top = store.surface(loser, "old_top")
+    winner_top = store.surface(winner, "table_top")
+    cup = store.add("cup")
+    store.on(cup, loser, loser_top)
+
+    store.update(loser, state="merged", merged_into=winner)
+    assert place_of(store, cup) == ("", 0)
+
+    store.on(cup, winner, winner_top, now=NOW + 1)
+    assert place_of(store, cup) == ("table_top", winner)
 
 
 def test_the_place_names_an_anchor_without_a_key_by_its_id(store):
@@ -772,8 +801,7 @@ def test_the_place_names_an_anchor_without_a_key_by_its_id(store):
     spoon = store.add("spoon")
     store.inside(spoon, drawer)
 
-    record = store.repository().get_object(spoon, include_cloud=False, now=NOW).record
-    assert (record.place, record.place_anchor_id) == ("", drawer)
+    assert place_of(store, spoon) == ("", drawer)
 
 
 def test_search_results_carry_the_place_anchor(store, furniture):
