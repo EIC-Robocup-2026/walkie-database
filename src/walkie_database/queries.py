@@ -113,6 +113,7 @@ class ObjectRecord:
     room_id: int
     room: str
     place: str
+    place_anchor_id: int
     attributes: Mapping[str, str]
     caption: str
     printed_text: str
@@ -382,7 +383,7 @@ class ObjectRepository:
         """The current row an id stands for, following a merge to its winner."""
         row = current_object(self._conn, self.map_id, object_id)
         record = self._records([row], now)[0]
-        record = replace(record, place=self._place(record.id))
+        record = self._with_place(record)
         return CurrentObject(
             requested_id=object_id,
             merged=record.id != object_id,
@@ -627,7 +628,7 @@ class ObjectRepository:
         # A mismatch comes back only when nothing else passed the hard filters.
         ordered = _ordered(clean or mismatching, query.superlative, plan.frame)
         kept = [
-            replace(match, record=replace(match.record, place=self._place(match.record.id)))
+            replace(match, record=self._with_place(match.record))
             for match in ordered[:max_results]
         ]
         return Matches(matches=kept, truncated=len(ordered) > max_results)
@@ -741,6 +742,7 @@ class ObjectRepository:
             room_id=row["room_id"] or 0,
             room=rooms.get(row["room_id"], ""),
             place="",
+            place_anchor_id=0,
             attributes=attributes,
             caption=(row["caption"] or "")[:MAX_CAPTION],
             printed_text=(row["printed_text"] or "")[:MAX_PRINTED_TEXT],
@@ -766,16 +768,22 @@ class ObjectRepository:
             split_from=row["split_from"] or 0,
         )
 
-    def _place(self, object_id: int) -> str:
-        """The key of the stored place: the heaviest relation, then the newest, then the lowest ids."""
-        rows = relations(self._conn, src_id=object_id)
+    def _with_place(self, record: ObjectRecord) -> ObjectRecord:
+        """The record with its stored place: the heaviest relation, then the newest, then the lowest ids.
+
+        ``place`` is the relation's surface key, else its anchor's key, else empty.
+        ``place_anchor_id`` is the anchor's id whenever there is a relation, so an
+        anchor without a key is still named.
+        """
+        rows = relations(self._conn, src_id=record.id)
         if not rows:
-            return ""
+            return record
         best = min(rows, key=lambda r: (-r["weight"], -r["updated_at"], r["dst_id"], r["surface_id"] or 0))
-        if best["surface_key"]:
-            return best["surface_key"]
-        anchor = self._conn.execute("SELECT key FROM object WHERE id = ?", (best["dst_id"],)).fetchone()
-        return anchor["key"] or ""
+        place = best["surface_key"]
+        if not place:
+            anchor = self._conn.execute("SELECT key FROM object WHERE id = ?", (best["dst_id"],)).fetchone()
+            place = anchor["key"] or ""
+        return replace(record, place=place, place_anchor_id=best["dst_id"])
 
     def _priors(self, query: ObjectFilter, text: str, max_results: int) -> tuple[list[Prior], bool]:
         """Catalogue items that no object stands for yet, with where they usually are.

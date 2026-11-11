@@ -115,6 +115,7 @@ def object_summary(record: ObjectRecord) -> ObjectSummary:
         room_id=record.room_id,
         room=record.room,
         place=record.place,
+        place_anchor_id=record.place_anchor_id,
         attributes=[Fact(key=key, value=value) for key, value in sorted(record.attributes.items())],
         caption=record.caption,
         printed_text=record.printed_text,

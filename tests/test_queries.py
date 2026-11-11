@@ -757,9 +757,28 @@ def test_an_anchor_returns_every_surface_with_an_honest_flag(store, furniture):
 
 def test_the_place_is_the_strongest_stored_relation(store, furniture):
     repo = store.repository()
-    assert repo.get_object(furniture["cup"], include_cloud=False, now=NOW).record.place == "table_top"
-    assert repo.get_object(furniture["plate"], include_cloud=False, now=NOW).record.place == "cabinet"
-    assert repo.get_object(furniture["table"], include_cloud=False, now=NOW).record.place == ""
+
+    def place(name):
+        record = repo.get_object(furniture[name], include_cloud=False, now=NOW).record
+        return record.place, record.place_anchor_id
+
+    assert place("cup") == ("table_top", furniture["table"])
+    assert place("plate") == ("cabinet", furniture["cabinet"])
+    assert place("table") == ("", 0)
+
+
+def test_the_place_names_an_anchor_without_a_key_by_its_id(store):
+    drawer = store.add("cabinet", layer="anchor", key=None, size=(0.5, 0.5, 0.5), enclosed=True)
+    spoon = store.add("spoon")
+    store.inside(spoon, drawer)
+
+    record = store.repository().get_object(spoon, include_cloud=False, now=NOW).record
+    assert (record.place, record.place_anchor_id) == ("", drawer)
+
+
+def test_search_results_carry_the_place_anchor(store, furniture):
+    [match] = search(store.repository(), text="bowl").matches
+    assert (match.record.place, match.record.place_anchor_id) == ("table_shelf", furniture["table"])
 
 
 def test_a_cloud_comes_only_when_asked_and_measured(store):

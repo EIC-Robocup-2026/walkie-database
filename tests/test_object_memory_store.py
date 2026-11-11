@@ -14,6 +14,7 @@ from walkie_database.object_context import relations, set_room_shape
 from walkie_database.object_memory import ANCHOR, MOVABLE, Maintenance, MergeConfig, ObjectMemory
 from walkie_database.object_memory_store import load_tracks, save, surface_key
 from walkie_database.objects import search_object_vectors
+from walkie_database.queries import ObjectRepository
 
 MAP = "m1"
 CONFIG = MergeConfig(confirm_views=2)
@@ -136,6 +137,8 @@ def test_an_anchor_gets_a_top_surface_and_a_cup_on_it_a_relation(store, cup_vect
     [row] = relations(store, src_id=cup.object_id)
     assert (row["dst_id"], row["predicate"], row["surface_id"]) == (table.object_id, "on", surface["id"])
     assert saved.relations == {cup.object_id: (table.object_id, surface["id"])}
+    record = ObjectRepository(store, map_id=MAP).get_object(cup.object_id, include_cloud=False, now=3.0).record
+    assert (record.place, record.place_anchor_id) == (surface_key(table.object_id), table.object_id)
 
 
 def test_a_table_seen_with_a_bottle_on_it_keeps_its_surface_under_the_bottle(store):

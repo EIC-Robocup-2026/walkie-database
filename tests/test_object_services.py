@@ -139,6 +139,7 @@ def test_search_answers_over_the_wire_with_full_summaries(node, objects, folder)
     assert cup.map_id == map_id_of(folder)
     assert cup.labels == ["cup", "mug"]
     assert (cup.official_name, cup.category, cup.room, cup.place) == ("blue cup", "cup", "living room", "table_top")
+    assert cup.place_anchor_id == objects["table"]
     assert {(fact.key, fact.value) for fact in cup.attributes} == {
         ("colour", "blue"), ("fragile", "true"), ("material", "ceramic")
     }
@@ -670,7 +671,7 @@ def record(**changes) -> ObjectRecord:
     fields = dict(
         id=7, map_id="m", frame_id="map", revision=0, key="", label="cup", labels=("cup",), official_name="",
         category="", layer="movable", state="present", source="perception", room_id=0, room="", place="",
-        attributes={}, caption="", printed_text="", caption_model="", prompt_version="", p_exist=0.5, p_now=0.5,
+        place_anchor_id=0, attributes={}, caption="", printed_text="", caption_model="", prompt_version="", p_exist=0.5, p_now=0.5,
         last_verified=None, age_s=0.0, first_seen=0.0, last_seen=0.0, n_detections=1, geometry_valid=False,
         geometry_stamp=None, center=(0.0, 0.0, 0.0), rotation=(0.0, 0.0, 0.0, 1.0), size=(0.0, 0.0, 0.0),
         weight_g=None, in_baseline=False, depth_seen=False, merged_into=0, split_from=0,

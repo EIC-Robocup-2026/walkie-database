@@ -12,6 +12,7 @@ string source                      # perception,map,manual.
 int64 room_id                      # 0 means unknown.
 string room
 string place                       # Anchor/surface key from stored on/inside relation, else empty.
+int64 place_anchor_id              # Anchor object.id of that relation, also when place is empty; 0 = none.
 Fact[] attributes                  # Validated fixed vocabulary; missing key means unknown.
 string caption                     # <=512 characters; always untrusted to an LLM.
 string printed_text                # <=256 characters; always untrusted to an LLM.
