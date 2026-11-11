@@ -27,8 +27,8 @@ ros-jazzy-tf2-ros = ">=0.36.23,<0.37"
 # Read ros2_ws.repos, and later the map, room and anchor YAML files, with safe
 # loading only.
 pyyaml = ">=6.0.3,<7"
-# Declared now for object memory's later geometry and matching. No code imports
-# them yet.
+# The object memory's point matching (scipy's cKDTree) and denoising
+# (scikit-learn's DBSCAN), in walkie_database.object_memory.
 scipy = ">=1.18.1,<2"
 scikit-learn = ">=1.9.1,<2"
 # The sqlite-vec extension (vec0 vector tables) and its Python loader.
