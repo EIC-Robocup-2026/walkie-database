@@ -187,7 +187,10 @@ voxel. Then it is scored against every track of its layer whose box is within
   `other_label_similarity` (0.5) for a movable track and 0 for an anchor.
 
 The detection joins the track with the highest total, if that total is at least 1.1
-and the spatial part at least 0.1. Otherwise it starts a new track.
+and the spatial part at least 0.1. Otherwise it starts a new track. On an equal
+total, a seeded anchor takes it, then a stored track: a stool's seat fits its
+seeded box and, as well, any track that a wider mask had already joined to the
+seat.
 
 **Layers.** A label in `anchor_labels` (chair, table, shelf, cabinet, sofa) makes an
 anchor, and any other label a movable object. A detection never joins a track of the

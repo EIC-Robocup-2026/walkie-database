@@ -19,7 +19,7 @@ Matching (``ObjectMemory.add``)
     for an anchor. A movable track answers to every label it was ever given; an
     anchor only to its main label. A detection never joins a track of the other
     layer: furniture labels make anchors, and every other label makes movable
-    objects.
+    objects. On an equal sum a seeded track wins, then a stored one.
 
 Upkeep (``ObjectMemory.maintain``)
     Every few seconds: each changed track keeps its largest DBSCAN cluster and
@@ -463,7 +463,7 @@ class ObjectMemory:
     def _best_match(self, detection: MapDetection, points: np.ndarray) -> Track | None:
         layer = self.config.layer_of(detection.label)
         bounds = (points.min(axis=0), points.max(axis=0))
-        best, best_score = None, self.config.match_threshold
+        best, best_rank = None, (self.config.match_threshold, False, False)
         for track in self.tracks:
             if track.layer != layer or not _boxes_touch(track.bounds(), bounds, self.config.match_distance):
                 continue
@@ -471,8 +471,12 @@ class ObjectMemory:
             if spatial < self.config.min_spatial:
                 continue
             score = spatial + self._visual(track, detection.label, detection.model, detection.embedding)
-            if score >= best_score:
-                best, best_score = track, score
+            # On an equal score a seeded track, then a stored one, takes the detection: a
+            # stool's seat fits its seeded box and, as well, a track that a mask of the
+            # wall beside it had joined to the seat.
+            rank = (score, track.fixed, track.object_id is not None)
+            if rank >= best_rank:
+                best, best_rank = track, rank
         return best
 
     def _spatial(self, track: Track, points: np.ndarray, bounds, *, same_label: bool) -> float:

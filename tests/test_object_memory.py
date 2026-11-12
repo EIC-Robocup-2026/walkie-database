@@ -569,6 +569,26 @@ def test_a_mask_that_is_mostly_floor_is_not_measured():
     assert (track.n_detections, track.measured_detections) == (1, 0)
 
 
+@pytest.mark.parametrize(("owner", "rival"), [("seeded", "made"), ("stored", "made"), ("seeded", "stored")])
+def test_a_detection_that_fits_two_tracks_equally_joins_the_seeded_then_the_stored_one(owner, rival):
+    """A stool's seat, after a mask of the wall beside it joined a seat to the wall's track."""
+    seat = voxel_downsample(blob((0.95, -4.53, 0.48), (0.28, 0.28, 0.03), count=800), 0.025)
+    wall = voxel_downsample(blob((0.3, -4.2, 0.5), (0.01, 0.8, 0.8), count=3000), 0.025)
+
+    def track(kind, key):
+        if kind == "seeded":
+            return seeded("chair", (0.95, -4.53, 0.247), (0.31, 0.31, 0.495), object_id=key)
+        points = seat if kind == "stored" else np.vstack((wall, seat))
+        return Track(key=key, layer=ANCHOR, points=points, labels={"chair": 4}, first_seen=0.0, last_seen=0.0,
+                     n_detections=4, n_views=4, object_id=key if kind == "stored" else None)
+
+    first, later = track(owner, 3), track(rival, 4)
+    memory = ObjectMemory(tracks=[first, later])  # the later track took a tie before
+    [joined] = memory.add([seen(blob((0.95, -4.53, 0.48), (0.28, 0.28, 0.03), count=800, seed=1),
+                                label="chair", stamp=1.0)])
+    assert joined is first and later.n_detections == 4
+
+
 def test_seeded_stored_and_unruled_anchors_are_never_held_back():
     assert seeded("shelf", (1.0, 1.0, 0.9), (1.6, 0.01, 1.8)).confirmed(MergeConfig())
     stored = Track(key=1, layer=ANCHOR, points=partition(0), labels={"chair": 3}, first_seen=0.0,

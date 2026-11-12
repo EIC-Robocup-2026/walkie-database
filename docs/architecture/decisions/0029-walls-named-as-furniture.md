@@ -43,7 +43,9 @@ unconfirmed track once it has not been seen for `ghost_age_s`. Seeded anchors,
 anchors already in the store and movable objects are never held back.
 `slab_thickness` is a node parameter, and 0 turns the rule off;
 `slab_min_points`, `slab_floor_clearance`, `slab_cluster_share` and
-`slab_cluster_gap` are `MergeConfig` fields.
+`slab_cluster_gap` are `MergeConfig` fields. When a
+detection fits a seeded anchor and another track equally well, it joins the
+seeded anchor.
 
 The point floor came from the replay. The room divider's first seven detections
 were fragments of 14 to 34 points near its end, each 0.05 to 0.07 m across, and
@@ -51,7 +53,7 @@ they stored it as a cabinet before any view of its face. Nine in ten detections
 of each piece of furniture had 50 points or more, and the only thin detections of
 furniture, three of a table called a chair, had fewer.
 
-The floor clearance and the clusters came from the first live run with
+The floor clearance, the clusters and the tie came from the first live run with
 the rule. The diagonal partition's track was dropped as a ghost, and a second later
 the detector named the partition's south-west end a chair again. Three masks of
 that end also took in the seat of a stool, a cluster of its own 0.96 to 1.04 m
@@ -60,8 +62,8 @@ also took in the floor in front of the partition, 25 to 28% of all their points,
 which falls in the partition's cluster. They measured 0.27 to 0.45 m deep. Three
 views of the seat alone then fitted the seeded stool and that new track equally
 well, and the later track took them. Three of its nine detections were thin, and
-it was stored as a chair. Measured as above, the three masks are thin too, six of
-the nine detections, and the track is held back.
+it was stored as a chair. Measured as above, all six detections of the partition
+are thin, and the seat joins the stool.
 
 The share and the gap keep furniture seen as parts apart whole, as far as the
 recordings show. The two Chula recordings hold 1737 detections with at least half
