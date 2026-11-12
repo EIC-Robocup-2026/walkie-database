@@ -515,6 +515,60 @@ def test_tracks_that_merge_pool_their_measured_detections():
     assert (wall.measured_detections, wall.thin_detections) == (2, 2)
 
 
+def test_a_wall_is_measured_without_the_floor_and_the_seat_in_its_mask():
+    """Masks of a wall's end took in the floor in front of it and the seat of a stool 1.2 m away."""
+    def view(seed):
+        face = blob((0.6, 1.0, 0.5), (0.8, 0.01, 0.8), count=3000, seed=seed)
+        floor = blob((0.6, 0.8, 0.01), (0.8, 0.4, 0.01), count=1500, seed=seed + 10)
+        seat = blob((1.8, 0.75, 0.5), (0.3, 0.3, 0.01), count=150, seed=seed + 20)
+        return np.vstack((face, floor, seat))
+
+    memory = ObjectMemory(MergeConfig(confirm_views=2))
+    for stamp in (1.0, 2.0, 3.0):
+        memory.add([seen(view(int(stamp)), label="chair", stamp=stamp)])
+    memory.maintain(now=4.0)
+    [wall] = memory.tracks
+    assert (wall.measured_detections, wall.thin_detections) == (3, 3)
+    assert memory.confirmed() == []
+
+
+def table_legs(seed=0):
+    """A table seen only through its four legs, 4 cm square, apart from one another."""
+    return np.vstack([blob((x, y, 0.4), (0.04, 0.04, 0.7), count=300, seed=seed + i)
+                      for i, (x, y) in enumerate(((0.0, 0.0), (0.6, 0.0), (0.0, 0.5), (0.6, 0.5)))])
+
+
+def sparse_grid():
+    """Points 10 cm apart, too far for DBSCAN to find a cluster."""
+    axis = np.arange(5) * 0.1
+    return np.array([(x, y, 0.2 + z) for x in axis for y in axis for z in axis[:4]])
+
+
+def chair_from_behind(seed=0):
+    """A chair's back, 0.4 m square, and a strip of its seat 12 cm in front of it: one cluster each."""
+    back = blob((0.0, 0.0, 0.7), (0.4, 0.01, 0.4), count=1500, seed=seed)
+    seat = blob((0.0, 0.15, 0.45), (0.4, 0.06, 0.01), count=150, seed=seed + 1)
+    return np.vstack((back, seat))
+
+
+@pytest.mark.parametrize("points", [table_legs(), chair_from_behind(), sparse_grid()],
+                         ids=["legs", "a seat beside a larger back", "no cluster"])
+def test_furniture_seen_as_parts_apart_is_measured_whole(points):
+    memory = ObjectMemory(MergeConfig(confirm_views=1))
+    memory.add([seen(points, label="table")])
+    [table] = memory.tracks
+    assert (table.measured_detections, table.thin_detections) == (1, 0)
+
+
+def test_a_mask_that_is_mostly_floor_is_not_measured():
+    floor = blob((1.0, 1.0, 0.01), (0.8, 0.8, 0.01), count=3000)
+    sliver = blob((1.0, 1.4, 0.3), (0.1, 0.01, 0.1), count=40)
+    memory = ObjectMemory(MergeConfig(confirm_views=1))
+    memory.add([seen(np.vstack((floor, sliver)), label="cabinet")])
+    [track] = memory.tracks
+    assert (track.n_detections, track.measured_detections) == (1, 0)
+
+
 def test_seeded_stored_and_unruled_anchors_are_never_held_back():
     assert seeded("shelf", (1.0, 1.0, 0.9), (1.6, 0.01, 1.8)).confirmed(MergeConfig())
     stored = Track(key=1, layer=ANCHOR, points=partition(0), labels={"chair": 3}, first_seen=0.0,

@@ -29,23 +29,51 @@ Asking the detector for `wall` and `door`, which the memory already drops
 
 **Decision**
 
-The memory measures each detection that joins an anchor track it made, when the
-detection has at least `slab_min_points` points (50, after downsampling). The
-detection is thin when its points span less than `slab_thickness` (0.05 m)
-across their main horizontal direction. The track is not confirmed before
+The memory measures each detection that joins an anchor track it made, on its
+points at least `slab_floor_clearance` (0.05 m) above the floor of the map frame.
+When their largest DBSCAN cluster holds at least `slab_cluster_share` (80%) of
+them, it measures only that cluster and the clusters within `slab_cluster_gap`
+(0.5 m) of it. It needs at least `slab_min_points` (50, after downsampling) such
+points. The detection is thin when they span less than
+`slab_thickness` (0.05 m) across their main horizontal direction. The track is not confirmed before
 `confirm_views` of its detections were measured, nor while more than half of
 them are thin, however often it is seen. It stays in memory while it is seen, so
 views that show its depth later confirm it, and it is dropped like any
 unconfirmed track once it has not been seen for `ghost_age_s`. Seeded anchors,
 anchors already in the store and movable objects are never held back.
 `slab_thickness` is a node parameter, and 0 turns the rule off;
-`slab_min_points` is a `MergeConfig` field.
+`slab_min_points`, `slab_floor_clearance`, `slab_cluster_share` and
+`slab_cluster_gap` are `MergeConfig` fields.
 
 The point floor came from the replay. The room divider's first seven detections
 were fragments of 14 to 34 points near its end, each 0.05 to 0.07 m across, and
 they stored it as a cabinet before any view of its face. Nine in ten detections
 of each piece of furniture had 50 points or more, and the only thin detections of
 furniture, three of a table called a chair, had fewer.
+
+The floor clearance and the clusters came from the first live run with
+the rule. The diagonal partition's track was dropped as a ghost, and a second later
+the detector named the partition's south-west end a chair again. Three masks of
+that end also took in the seat of a stool, a cluster of its own 0.96 to 1.04 m
+from the partition's, with 9 to 13% of their points above the floor. Two of them
+also took in the floor in front of the partition, 25 to 28% of all their points,
+which falls in the partition's cluster. They measured 0.27 to 0.45 m deep. Three
+views of the seat alone then fitted the seeded stool and that new track equally
+well, and the later track took them. Three of its nine detections were thin, and
+it was stored as a chair. Measured as above, the three masks are thin too, six of
+the nine detections, and the track is held back.
+
+The share and the gap keep furniture seen as parts apart whole, as far as the
+recordings show. The two Chula recordings hold 1737 detections with at least half
+their points above the floor in a box of the truth file. Measuring the largest
+cluster alone made 34 of the shelf's thin (a side panel is a slab) and left 34
+others unmeasured, 29 of them of the kitchen table and a stool, whose legs stand
+apart. With the share at 0.8 and the gap at 0.5 m, none of the 1737 changes its
+verdict from measuring all its points, and the three masks of the partition's end
+are thin. At a share of 0.75 a detection of the shelf turns thin, and at 0.9 two
+of the three masks stay thick. Any gap from 0.15 to 0.7 m gives the same verdicts;
+the gap keeps a chair's seat seen beside its larger back, a separate cluster a few
+centimetres to a few decimetres away, which the share alone would leave out.
 
 **Consequences**
 
@@ -56,15 +84,24 @@ furniture, three of a table called a chair, had fewer.
   relations score as before.
 - Furniture seen only as sparse fragments, from afar or mostly hidden, is never
   measured and never stored.
-- The live runs' stores keep only merged clouds, so the rule was checked there
-  against their boxes, not their detections. A new live run is the check.
+- On the recording of the first live run with the rule, no anchor stands for no
+  furniture (1 with the rule as first written, 2 without the rule), and the objects
+  and `on` relations score as before.
+- A wall measures deep in a view whose mask also takes in something within 0.5 m
+  of it, or more than a fifth of its points above the floor elsewhere. A piece of
+  furniture measures thin in a view where a slab-like part of it, such as a
+  chair's back, holds four fifths of the points and the rest lies over 0.5 m away.
+  The rule counts views: such furniture is held back only when this happens in
+  more than half of its measured detections, and such a wall is stored only when
+  it happens in at least half.
 - A cabinet or a wardrobe seen mostly head-on is a slab too. It is stored once at
   least half of its measured detections show its depth, which may be never if it
   stands in a corner.
   Seeding it avoids that.
 - The values come from simulated depth, which has no noise. A real depth camera
   spreads a wall's points along each ray, so a real recording must set
-  `slab_thickness`.
+  `slab_thickness`. The floor clearance takes the floor to be at z 0 in the map
+  frame.
 - An anchor stored before the rule stays. Restoring the store from the seed
   removes it.
 

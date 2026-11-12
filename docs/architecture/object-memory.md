@@ -268,9 +268,15 @@ detections are **thin**, however often it is seen. A detection is thin when its
 points span less than `slab_thickness` (0.05 m) across their main horizontal
 direction, measured as the box is. That is a wall, a partition or an open door that
 the detector named as furniture. Each detection comes from one camera pose, so
-drift between views cannot thicken it, as it thickens the merged cloud. Only a
-detection with at least `slab_min_points` points (50, after downsampling) is
-measured, and the track needs `confirm_views` measured detections before it is
+drift between views cannot thicken it, as it thickens the merged cloud. It is
+measured without its points less than `slab_floor_clearance` (0.05 m) above the
+map's floor. When one DBSCAN cluster holds at least `slab_cluster_share` (80%) of
+the rest, it is measured on that cluster and the clusters within
+`slab_cluster_gap` (0.5 m) of it. A mask of a wall's end can take in the floor in
+front of it and the seat of a stool a metre away, which make it look deep, while a
+stool's legs, or a chair's seat beside its back, seen apart, are all of it.
+Only a detection with at least `slab_min_points` points (50, after downsampling and
+those two steps) is measured, and the track needs `confirm_views` measured detections before it is
 confirmed: a sparse fragment, such as a partition's end seen from afar, says nothing
 of its shape. The track stays in memory while it is seen, so views that show its
 depth later confirm it, and it goes as a ghost once unseen
@@ -448,7 +454,13 @@ explains the output.
 - **A wall is thin only in simulated depth.** Simulated depth has no noise, so a
   wall's detection spans under 3 cm. A real depth camera spreads a wall's points
   along each ray, so check `slab_thickness` on a real recording before relying on
-  the rule.
+  the rule. The rule also takes the floor to be at z 0 in the map frame: on a map
+  whose floor is higher, the floor in a mask is measured with the wall.
+- **A mask that takes in a neighbour misleads one view.** A wall measures deep when
+  its mask also takes in something within `slab_cluster_gap` of it, or more than a
+  fifth of its points elsewhere. Furniture measures thin when a slab-like part, such
+  as a chair's back, holds four fifths of the points and the rest is farther away.
+  Only a majority of such views changes a track's verdict.
 - **Localization error becomes merging error.** Two objects closer than
   `match_distance` with a shared label can merge, and an object seen from two poses
   that disagree by more than it can split.

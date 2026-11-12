@@ -32,8 +32,9 @@ Upkeep (``ObjectMemory.maintain``)
     objects, the save counts the arrays against the store). Only a
     confirmed track gets an object id and a row in the store, so a one-off false
     detection never reaches it. An anchor track the memory made is not confirmed
-    before ``confirm_views`` of its detections had enough points to measure
-    (``slab_min_points``), nor while most of those were thin slabs
+    before ``confirm_views`` of its detections had enough points above the floor to
+    measure (``slab_min_points``, ``slab_floor_clearance``, ``slab_cluster_share``,
+    ``slab_cluster_gap``), nor while most of those were thin slabs
     (``slab_thickness``), however often it is seen: it is a wall or a door the
     detector named as furniture.
 
@@ -110,6 +111,23 @@ class MergeConfig:
     # of 14 to 34 points stored a partition before any view of its face, and nine in
     # ten detections of each piece of furniture had 50 points or more.
     slab_min_points: int = 50
+    # Metres above the map frame's floor (z 0). A detection is measured without its
+    # points below this. When one DBSCAN cluster then holds at least
+    # slab_cluster_share of the rest, it is measured on that cluster and the clusters
+    # within slab_cluster_gap of it. In a live Chula run, three masks of a wall's end
+    # took in the seat of a stool, a cluster 0.96 to 1.04 m from the wall's with 9 to
+    # 13% of the points above the floor, and two of them the floor in front of the
+    # wall, which joins the wall's cluster. The wall was stored as a chair.
+    slab_floor_clearance: float = 0.05
+    # Below this share, the clusters are measured together, as a stool's legs. On the
+    # Chula recordings, no detection of furniture changed its verdict at 0.8 from
+    # measuring all its points; at 0.75 one of the shelf's turned thin, and at 0.9 two
+    # of the three masks of the wall's end stayed thick.
+    slab_cluster_share: float = 0.8
+    # Metres. A cluster this close to the main one is part of the same thing, as a
+    # chair's seat beside its back. On the Chula recordings any value from 0.15 to 0.7
+    # gave the same verdicts.
+    slab_cluster_gap: float = 0.5
     surface_bin: float = 0.02  # metres, the height bins that find an anchor's top surface
     surface_min_share: float = 0.3  # of the fullest bin's points, for a bin to be a surface
     anchor_labels: tuple[str, ...] = DEFAULT_ANCHOR_LABELS
@@ -497,11 +515,13 @@ class ObjectMemory:
             track.set_points(self._capped(voxel_downsample(np.vstack((track.points, points)), self.config.voxel_size)))
         track.labels[detection.label] = track.labels.get(detection.label, 0) + 1
         track.n_detections += 1
-        if track.layer == ANCHOR and not track.fixed and len(points) >= self.config.slab_min_points:
-            # One camera pose, so its thickness holds no drift between views.
-            view = upright_box(points, percentile=self.config.box_percentile, minimum=0.0)
-            track.measured_detections += 1
-            track.thin_detections += int(min(view.size[:2]) < self.config.slab_thickness)
+        if track.layer == ANCHOR and not track.fixed:
+            body = self._body(points)
+            if len(body) >= self.config.slab_min_points:
+                # One camera pose, so its thickness holds no drift between views.
+                view = upright_box(body, percentile=self.config.box_percentile, minimum=0.0)
+                track.measured_detections += 1
+                track.thin_detections += int(min(view.size[:2]) < self.config.slab_thickness)
         if detection.stamp not in track.unsaved_views:
             track.unsaved_views.add(detection.stamp)
             track.n_views += 1
@@ -559,6 +579,32 @@ class ObjectMemory:
         result.dropped = before - len(self.tracks)
         self._merge_duplicates(result)
         return result
+
+    def _body(self, points: np.ndarray) -> np.ndarray:
+        """The points of one detection that its thickness is measured on.
+
+        Those at least ``slab_floor_clearance`` above the floor. When their largest
+        DBSCAN cluster holds at least ``slab_cluster_share`` of them, only it and the
+        clusters within ``slab_cluster_gap`` of it: a mask of a wall that takes in the
+        floor in front of it, or a stool a metre away, would make the wall look deep.
+        Otherwise, or with no cluster, all of them: the legs of a stool seen apart are
+        all of it.
+        """
+        above = points[points[:, 2] >= self.config.slab_floor_clearance]
+        if len(above) < self.config.dbscan_min_points:
+            return above
+        labels = DBSCAN(eps=self.config.dbscan_eps, min_samples=self.config.dbscan_min_points).fit(above).labels_
+        if not (labels >= 0).any():
+            return above
+        main = np.bincount(labels[labels >= 0]).argmax()
+        if (labels == main).sum() < self.config.slab_cluster_share * len(above):
+            return above
+        others = (labels >= 0) & (labels != main)
+        kept = labels == main
+        if others.any():
+            distances, _ = cKDTree(above[kept]).query(above[others], distance_upper_bound=self.config.slab_cluster_gap)
+            kept |= np.isin(labels, labels[others][np.isfinite(distances)])
+        return above[kept]
 
     def _clean(self, track: Track) -> None:
         """Denoise a changed track, then measure its box and top surface again.
