@@ -70,8 +70,8 @@ counted and dropped. Every ``merge_period_s`` the memory denoises, boxes and
 deduplicates its objects, measures the anchors' top surfaces, and writes the
 confirmed objects and their ``on`` relations in one transaction
 (``walkie_database.object_memory_store``). ``confirm_views``, ``anchor_labels``,
-``ignore_labels``, ``match_distance`` and ``other_label_similarity`` tune the
-merging (docs/architecture/object-memory.md#parameters). On shutdown it saves
+``ignore_labels``, ``match_distance``, ``other_label_similarity`` and
+``slab_thickness`` tune the merging (docs/architecture/object-memory.md#parameters). On shutdown it saves
 once more. Without memory mode there is no subscription, and the services that
 need a map answer NOT_READY.
 
@@ -82,6 +82,7 @@ in a simulation they are sim time.
 from __future__ import annotations
 
 import functools
+import math
 import signal
 import sqlite3
 import uuid
@@ -403,6 +404,7 @@ class DatabaseNode(Node):
         other = self.declare_parameter(
             "other_label_similarity", MergeConfig.other_label_similarity, _READ_ONLY
         ).value
+        thickness = self.declare_parameter("slab_thickness", MergeConfig.slab_thickness, _READ_ONLY).value
         if not period > 0 or confirm < 1:
             raise MapGateError(
                 f"merge_period_s must be above 0 and confirm_views at least 1, not {period} and {confirm}."
@@ -411,10 +413,13 @@ class DatabaseNode(Node):
             raise MapGateError(
                 f"match_distance must be above 0 and other_label_similarity in [0, 1], not {distance} and {other}."
             )
+        if not (math.isfinite(thickness) and thickness >= 0):
+            raise MapGateError(f"slab_thickness must be finite and at least 0, not {thickness}.")
         config = MergeConfig(
             confirm_views=int(confirm),
             match_distance=float(distance),
             other_label_similarity=float(other),
+            slab_thickness=float(thickness),
             anchor_labels=tuple(anchors),
             ignore_labels=tuple(ignored),
         )

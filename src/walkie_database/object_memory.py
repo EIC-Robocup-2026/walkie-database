@@ -31,7 +31,11 @@ Upkeep (``ObjectMemory.maintain``)
     array counted once even when two merged tracks both saw it (for stored
     objects, the save counts the arrays against the store). Only a
     confirmed track gets an object id and a row in the store, so a one-off false
-    detection never reaches it.
+    detection never reaches it. An anchor track the memory made is not confirmed
+    before ``confirm_views`` of its detections had enough points to measure
+    (``slab_min_points``), nor while most of those were thin slabs
+    (``slab_thickness``), however often it is seen: it is a wall or a door the
+    detector named as furniture.
 
 A seeded anchor is a fixed track: it has a box and no points. A detection of its
 label that falls in its box confirms it, and changes no geometry. An anchor track
@@ -90,6 +94,22 @@ class MergeConfig:
     # does not share its space, so the detector has named part of the seeded anchor
     # otherwise: a strip of a sofa a table, the top of a table a chair.
     seed_containment: float = 0.8
+    # A detection of an anchor is thin when its points, across their main horizontal
+    # direction (box_percentile on each side), span less than this. An anchor track
+    # the memory made is never confirmed while more than half of its detections are
+    # thin: it is a wall, a partition or an open door that the detector named as
+    # furniture. Each detection is one camera pose, so localization drift between
+    # views cannot thicken it, as it does the merged cloud. In the simulated Chula
+    # drive, the median detection of a wall or a door spanned at most 0.027 m, and of
+    # furniture at least 0.10 m. 0 turns the rule off.
+    slab_thickness: float = 0.05
+    # A detection of an anchor is measured for slab_thickness only with at least this
+    # many points after downsampling, and an anchor track the memory made is not
+    # confirmed before confirm_views of its detections were measured. A sparse
+    # fragment's span says nothing of its shape: in the Chula drive, seven fragments
+    # of 14 to 34 points stored a partition before any view of its face, and nine in
+    # ten detections of each piece of furniture had 50 points or more.
+    slab_min_points: int = 50
     surface_bin: float = 0.02  # metres, the height bins that find an anchor's top surface
     surface_min_share: float = 0.3  # of the fullest bin's points, for a bin to be a surface
     anchor_labels: tuple[str, ...] = DEFAULT_ANCHOR_LABELS
@@ -209,6 +229,10 @@ class Track:
     # False until a save has counted the views against the store, and again after the
     # track absorbs a stored object, whose history the store must count with its own.
     views_counted: bool = False
+    # An anchor's detections measured for MergeConfig.slab_thickness, and how many of
+    # them were thinner. In memory only: a stored track is never held back.
+    measured_detections: int = 0
+    thin_detections: int = 0
     _tree: cKDTree | None = None
     _bounds: tuple[np.ndarray, np.ndarray] | None = None
 
@@ -225,7 +249,20 @@ class Track:
         return None if norm == 0.0 else self.embedding_sum / norm
 
     def confirmed(self, config: MergeConfig) -> bool:
-        return self.fixed or self.object_id is not None or self.n_views >= config.confirm_views
+        if self.fixed or self.object_id is not None:
+            return True
+        return self.n_views >= config.confirm_views and not self.held_back(config)
+
+    def held_back(self, config: MergeConfig) -> bool:
+        """Whether the track is an anchor the memory made that its detections have not shown to be furniture.
+
+        That is, fewer than ``confirm_views`` of them were measured, or more than half
+        of those were thin slabs (``MergeConfig.slab_thickness``). A seeded or stored
+        track never is.
+        """
+        if self.layer != ANCHOR or self.fixed or self.object_id is not None or config.slab_thickness <= 0:
+            return False
+        return self.measured_detections < config.confirm_views or 2 * self.thin_detections > self.measured_detections
 
     def tree(self) -> cKDTree | None:
         if self._tree is None and len(self.points):
@@ -460,6 +497,11 @@ class ObjectMemory:
             track.set_points(self._capped(voxel_downsample(np.vstack((track.points, points)), self.config.voxel_size)))
         track.labels[detection.label] = track.labels.get(detection.label, 0) + 1
         track.n_detections += 1
+        if track.layer == ANCHOR and not track.fixed and len(points) >= self.config.slab_min_points:
+            # One camera pose, so its thickness holds no drift between views.
+            view = upright_box(points, percentile=self.config.box_percentile, minimum=0.0)
+            track.measured_detections += 1
+            track.thin_detections += int(min(view.size[:2]) < self.config.slab_thickness)
         if detection.stamp not in track.unsaved_views:
             track.unsaved_views.add(detection.stamp)
             track.n_views += 1
@@ -612,6 +654,8 @@ class ObjectMemory:
             name = own or name
             winner.labels[name] = winner.labels.get(name, 0) + count
         winner.n_detections += loser.n_detections
+        winner.measured_detections += loser.measured_detections
+        winner.thin_detections += loser.thin_detections
         # An array that showed both tracks is one view of the merged object. Arrays
         # the store already holds are compared there, by the next save.
         winner.n_views += loser.n_views - len(winner.unsaved_views & loser.unsaved_views)

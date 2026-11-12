@@ -12,6 +12,7 @@ from seed_helpers import write_map_folder
 from sensor_msgs.msg import PointCloud2
 from test_object_memory import blob, embedding_near, unit
 from visualization_msgs.msg import Marker, MarkerArray
+from walkie_database.map_config import MapGateError
 from walkie_database_msgs.msg import ModelVector, ObjectQuery, OperationStatus
 from walkie_database_msgs.srv import GetStoreStatus, SearchObjects
 
@@ -91,6 +92,12 @@ def test_an_array_with_no_transform_is_counted_and_not_merged(node, cup_vector):
     node._on_objects(cup_array(node, wall_now(node), cup_vector, 0))
     assert node.tf_misses == 1
     assert merged(node) == []
+
+
+@pytest.mark.parametrize("thickness", [-0.1, float("nan"), float("inf")])
+def test_a_slab_thickness_out_of_range_stops_the_start(ros, store, folder, thickness):
+    with pytest.raises(MapGateError, match="slab_thickness must be finite and at least 0"):
+        memory_node(store, folder, slab_thickness=thickness)
 
 
 def test_one_view_is_not_enough_to_store_an_object(node, cup_vector):

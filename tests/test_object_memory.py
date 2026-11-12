@@ -421,6 +421,114 @@ def test_containment_needs_a_seeded_anchor_and_never_takes_a_movable_object():
     assert len(without_seed.tracks) == 2
 
 
+def partition(seed, across=0.0):
+    """One view of a partition 1.6 m long and 0.8 m high: a face 1 cm deep, *across* metres off."""
+    return blob((1.0, 1.0 + across, 0.4), (1.6, 0.01, 0.8), count=3000, seed=seed)
+
+
+def test_furniture_shaped_like_a_wall_is_kept_unconfirmed_until_it_is_a_ghost():
+    memory = ObjectMemory(MergeConfig(confirm_views=2, ghost_age_s=10.0))
+    for stamp in (1.0, 2.0, 3.0):
+        memory.add([seen(partition(int(stamp)), label="chair", stamp=stamp)])
+    memory.maintain(now=4.0)
+    [wall] = memory.tracks
+    assert (wall.n_views, wall.measured_detections, wall.thin_detections) == (3, 3, 3)
+    assert wall.held_back(memory.config) and memory.confirmed() == []
+    assert memory.maintain(now=20.0).dropped == 1 and memory.tracks == []
+
+
+def test_a_wall_smeared_by_drift_is_still_a_slab():
+    """Each view lands 6 cm further off, so the merged box is 0.3 m deep and only 2.7 times as long."""
+    memory = ObjectMemory(MergeConfig(confirm_views=2))
+    for step in range(6):
+        view = blob((1.0, 1.0 + 0.06 * step, 0.4), (0.8, 0.01, 0.8), count=2000, seed=step)
+        memory.add([seen(view, label="chair", stamp=float(step))])
+    memory.maintain(now=6.0)
+    [wall] = memory.tracks
+    assert min(wall.box.size[:2]) > 0.25
+    assert wall.held_back(memory.config) and memory.confirmed() == []
+
+
+@pytest.mark.parametrize(
+    ("label", "size", "slab"),
+    [
+        ("cabinet", (0.8, 0.01, 1.9), True),  # an open door
+        ("table", (1.6, 0.21, 0.4), False),  # a strip of a sofa
+        ("chair", (0.35, 0.10, 0.45), False),  # part of a desk
+        ("book", (0.3, 0.01, 0.2), False),  # a movable object is never a slab
+    ],
+)
+def test_only_a_thin_anchor_is_held_back(label, size, slab):
+    memory = ObjectMemory(MergeConfig(confirm_views=1))
+    memory.add([seen(blob((1.0, 1.0, 1.0), size, count=4000), label=label)])
+    memory.maintain(now=1.0)
+    [track] = memory.tracks
+    assert track.held_back(memory.config) is slab
+    assert len(memory.confirmed()) == (0 if slab else 1)
+
+
+def test_sparse_fragments_cannot_confirm_an_anchor_and_dense_views_can():
+    """A fragment too sparse to measure says nothing of the shape, as a partition's end seen from afar."""
+    def view(count, seed):
+        return blob((1.0, 1.0, 0.4), (0.12, 0.12, 0.12), count=count, seed=seed)
+
+    memory = ObjectMemory(MergeConfig(confirm_views=3))
+    for stamp in (1.0, 2.0, 3.0):
+        memory.add([seen(view(30, int(stamp)), label="chair", stamp=stamp)])
+    memory.maintain(now=4.0)
+    [chair] = memory.tracks
+    assert (chair.n_views, chair.measured_detections) == (3, 0)
+    assert memory.confirmed() == []
+    for stamp in (4.0, 5.0, 6.0):
+        memory.add([seen(view(1000, int(stamp)), label="chair", stamp=stamp)])
+    memory.maintain(now=7.0)
+    assert memory.confirmed() == [chair]
+    assert (chair.measured_detections, chair.thin_detections) == (3, 0)
+
+
+def test_a_slab_whose_later_views_show_its_depth_is_confirmed():
+    """A cabinet seen head-on is only its front, until views from an angle show its side."""
+    def front(seed):
+        return blob((1.0, 1.0, 0.5), (0.8, 0.01, 1.0), count=3000, seed=seed)
+
+    memory = ObjectMemory(MergeConfig(confirm_views=2))
+    for stamp in (1.0, 2.0):
+        memory.add([seen(front(int(stamp)), label="cabinet", stamp=stamp)])
+    memory.maintain(now=3.0)
+    assert memory.confirmed() == []
+    for stamp in (3.0, 4.0, 5.0):
+        side = blob((1.4, 1.25, 0.5), (0.01, 0.5, 1.0), count=2000, seed=int(stamp))
+        memory.add([seen(np.vstack((front(int(stamp)), side)), label="cabinet", stamp=stamp)])
+    memory.maintain(now=6.0)
+    [cabinet] = memory.confirmed()
+    assert (cabinet.measured_detections, cabinet.thin_detections) == (5, 2)
+
+
+def test_tracks_that_merge_pool_their_measured_detections():
+    memory = ObjectMemory(MergeConfig(confirm_views=1))
+    memory.add([seen(partition(0), label="chair", stamp=1.0)])
+    memory.add([seen(partition(1, across=0.3), label="chair", stamp=1.0)])  # too far off to join
+    first, second = memory.tracks
+    second.set_points(first.points.copy())  # now they overlap, as after a correction
+    memory.maintain(now=2.0)
+    [wall] = memory.tracks
+    assert (wall.measured_detections, wall.thin_detections) == (2, 2)
+
+
+def test_seeded_stored_and_unruled_anchors_are_never_held_back():
+    assert seeded("shelf", (1.0, 1.0, 0.9), (1.6, 0.01, 1.8)).confirmed(MergeConfig())
+    stored = Track(key=1, layer=ANCHOR, points=partition(0), labels={"chair": 3}, first_seen=0.0,
+                   last_seen=0.0, n_views=3, object_id=7, measured_detections=3, thin_detections=3)
+    memory = ObjectMemory(tracks=[stored])
+    memory.maintain(now=1.0)
+    assert not stored.held_back(memory.config) and memory.confirmed() == [stored]
+
+    unruled = ObjectMemory(MergeConfig(confirm_views=1, slab_thickness=0.0))
+    unruled.add([seen(partition(0), label="chair")])
+    unruled.maintain(now=1.0)
+    assert len(unruled.confirmed()) == 1
+
+
 def test_a_lower_containment_takes_more_of_a_track_reaching_outside():
     def chair_count(containment):
         table = seeded("table", (2.0, 0.0, 0.4), (1.0, 0.6, 0.8))

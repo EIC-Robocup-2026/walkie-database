@@ -35,6 +35,9 @@ To run it on the simulation, follow
 - **A seeded anchor owns its box.** Furniture the detector finds mostly inside it is
   that anchor under another name, and merges into it
   ([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)).
+- **Furniture shaped like a wall is not stored.** An anchor the memory made whose
+  detections are mostly thin slabs is a wall or a door the detector named as
+  furniture ([ADR-0029](decisions/0029-walls-named-as-furniture.md)).
 - **Confirmed objects go out as markers and a cloud**, transient local, in the map
   frame ([ADR-0013](decisions/0013-publish-boxes-to-rviz-and-moveit.md)).
 - **A recording replays offline** through the same code, to tune and score it
@@ -260,6 +263,19 @@ A track is **confirmed** once it has been seen in `confirm_views` arrays (3). On
 confirmed track gets an object id and a row, so a one-off false detection never
 reaches the store.
 
+An anchor track the memory made is not confirmed while more than half of its
+detections are **thin**, however often it is seen. A detection is thin when its
+points span less than `slab_thickness` (0.05 m) across their main horizontal
+direction, measured as the box is. That is a wall, a partition or an open door that
+the detector named as furniture. Each detection comes from one camera pose, so
+drift between views cannot thicken it, as it thickens the merged cloud. Only a
+detection with at least `slab_min_points` points (50, after downsampling) is
+measured, and the track needs `confirm_views` measured detections before it is
+confirmed: a sparse fragment, such as a partition's end seen from afar, says nothing
+of its shape. The track stays in memory while it is seen, so views that show its
+depth later confirm it, and it goes as a ghost once unseen
+([ADR-0029](decisions/0029-walls-named-as-furniture.md)).
+
 ### 6. Save
 
 After each round, the confirmed tracks that changed are written in one transaction
@@ -330,6 +346,7 @@ All are read-only, and read once at start in memory mode.
 | `ignore_labels` | `[wall, floor, ceiling, door, window]` | Labels dropped before matching |
 | `match_distance` | 0.10 | Metres within which a point overlaps a track. Above 0 |
 | `other_label_similarity` | 0.5 | The visual value of another label for a movable track, in [0, 1]. 0 means only the same label joins without vectors |
+| `slab_thickness` | 0.05 | Metres. An anchor the memory made is not stored while more than half of its measured detections are thinner. Finite and at least 0; 0 turns the rule off, with its need for measured detections |
 
 A value out of range stops the start. The other constants, such as the voxel size,
 the thresholds and the DBSCAN settings, are fields of `MergeConfig` in
@@ -418,12 +435,20 @@ explains the output.
   `report_sighting`) still answer `NOT_READY`.
 - **Top surfaces only.** A shelf's inner levels are not found, so an object inside a
   shelf gets no relation, and the memory never stores `inside`.
-- **The detector's labels set the layers.** A partition wall called a chair becomes
-  an anchor, and a strip of the sofa that the detector calls a table becomes a table
-  anchor of its own. Asking vision for `wall` and `door`, which the memory drops
-  (`ignore_labels`), avoids the first; a `partition` label would also need adding to
-  `ignore_labels`. Seeding the furniture avoids the second
-  ([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)).
+- **The detector's labels set the layers.** A strip of the sofa that the detector
+  calls a table becomes a table anchor of its own. Seeding the furniture avoids it
+  ([ADR-0028](decisions/0028-seeded-anchors-own-their-box.md)). A wall or a door
+  called a chair or a cabinet is held back as a slab
+  ([ADR-0029](decisions/0029-walls-named-as-furniture.md)).
+- **Furniture seen from one side only can look like a wall.** A cabinet seen mostly
+  head-on is a slab, and is not stored until at least half of its measured
+  detections show its depth.
+  Seed it if the robot seldom sees its side. Furniture seen only as sparse
+  fragments, from afar or mostly hidden, is never measured and never stored.
+- **A wall is thin only in simulated depth.** Simulated depth has no noise, so a
+  wall's detection spans under 3 cm. A real depth camera spreads a wall's points
+  along each ray, so check `slab_thickness` on a real recording before relying on
+  the rule.
 - **Localization error becomes merging error.** Two objects closer than
   `match_distance` with a shared label can merge, and an object seen from two poses
   that disagree by more than it can split.
@@ -478,3 +503,7 @@ explains the output.
 ??? note "ADR-0028: A seeded anchor owns its box, whatever the detector calls what is inside · Proposed"
 
     --8<-- "architecture/decisions/0028-seeded-anchors-own-their-box.md:body"
+
+??? note "ADR-0029: An anchor the memory made is not stored while most of its detections are thin slabs · Proposed"
+
+    --8<-- "architecture/decisions/0029-walls-named-as-furniture.md:body"

@@ -1538,7 +1538,7 @@ accuracy and query latency under load. No fake test stands in for these.
 
     --8<-- "architecture/decisions/0010-session-owns-people-and-conversations.md:body"
 
-The object memory decisions, ADR-0011 to ADR-0013 and ADR-0025 to ADR-0028, are on
+The object memory decisions, ADR-0011 to ADR-0013 and ADR-0025 to ADR-0029, are on
 the [Object Memory](object-memory.md#decisions) page.
 
 ??? success "ADR-0014: Use Zenoh as the default ROS 2 middleware · Accepted"

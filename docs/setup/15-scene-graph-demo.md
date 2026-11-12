@@ -185,7 +185,10 @@ arrays of `chula-drive-01` takes 60 to 80 s. The summary it prints:
 With the defaults and the step 1 seed, `chula-drive-01` gives 10 of 12 objects at 1.0
 track each, 9 of 9 pieces of furniture at 1.0 anchor each, and 8 right `on` relations
 out of 8. It states 12 `on` relations: the other 4 rest on the shelf's levels below
-its top, which the truth file does not score. The two objects missed are on the
+its top, which the truth file does not score. No anchor stands for no furniture:
+the walls and the door that the detector calls chairs and cabinets are held back
+as slabs ([ADR-0029](../architecture/decisions/0029-walls-named-as-furniture.md)).
+The two objects missed are on the
 shelf's inner level and on the bar. The boxes of movable objects are several times
 as wide as the objects: each box holds every view, and the simulation's
 localization drifted by about 0.2 m late in the drive
@@ -210,7 +213,7 @@ pixi run test tests/test_object_memory.py tests/test_object_memory_store.py \
 
 | File | What it checks |
 | ---- | -------------- |
-| `tests/test_object_memory.py` | Downsampling, boxes and clusters, matching with and without vectors, anchors' names, ignored labels, partial views, confirming, ghosts, surfaces, duplicates and seeded anchors |
+| `tests/test_object_memory.py` | Downsampling, boxes and clusters, matching with and without vectors, anchors' names, ignored labels, partial views, confirming, ghosts, slabs, surfaces, duplicates and seeded anchors |
 | `tests/test_object_memory_store.py` | What a save writes, tombstones, a top surface and an `on` relation, a lifted cup losing it, and a restart merging into the stored objects |
 | `tests/test_object_memory_node.py` | Arrays to a stored object that `search_objects` finds, a missing transform, one view not being enough, markers and cloud for a late subscriber, and a restarted node |
 | `tests/test_object_markers.py` | The `on` line ends on the anchor's surface, and a relation to an object that is not shown draws nothing |
