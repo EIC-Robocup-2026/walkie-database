@@ -184,7 +184,10 @@ With the defaults and the step 1 seed, `chula-drive-01` gives 10 of 12 objects a
 track each, 9 of 9 pieces of furniture at 1.0 anchor each, and 8 right `on` relations
 out of 8. It states 12 `on` relations: the other 4 rest on the shelf's levels below
 its top, which the truth file does not score. The two objects missed are on the
-shelf's inner level and on the bar.
+shelf's inner level and on the bar. The boxes of movable objects are several times
+as wide as the objects: each box holds every view, and the simulation's
+localization drifted by about 0.2 m late in the drive
+([Known limits](../architecture/object-memory.md#known-limits)).
 
 Without `--seed`, the furniture splits into 1.22 anchors each and 7 of the 8 `on`
 relations are right, with none wrong. The detector never sees the coffee table, so

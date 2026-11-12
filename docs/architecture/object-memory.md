@@ -425,6 +425,17 @@ explains the output.
 - **Localization error becomes merging error.** Two objects closer than
   `match_distance` with a shared label can merge, and an object seen from two poses
   that disagree by more than it can split.
+- **A movable object's box is the spread of its views.** The box holds every view
+  merged into the object, so the localization error of each view widens it. On
+  `chula-drive-01`, the five objects seen until the end of the drive (about 580 s)
+  had their first ten views 0.02 to 0.09 m from the truth and their last ten 0.18 to
+  0.22 m away, nearly all along −x. The boxes came out several times as wide as the
+  objects (0.37 by 0.27 m for a mug of 0.12 by 0.08 m), with centres 0.03 to 0.14 m
+  from the truth, and each box covered 92% of its object's footprint on average. A
+  box from only the last 10 or 20 views is about the right size, but it lies mostly
+  beside the object (about 20% of the footprint on average), and its centre is
+  further off (0.135 m against 0.094 m on average). So the memory keeps the whole
+  spread, and the fix is better localization, not a smaller box.
 - **Seeded anchors keep their seeded geometry**, even when the camera sees them
   elsewhere.
 - **A seeded anchor takes in furniture that stands inside its box.** A chair pushed
