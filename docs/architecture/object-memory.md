@@ -343,8 +343,10 @@ The object reads (`search_objects`, `get_object`, `find_near`, `get_room_content
 `find_objects`) read the stored rows, so they return the memory's objects as soon as
 they are saved, with their layer, labels, room, box and `on` relations
 ([The object contract](database.md#the-object-contract)). A movable object on an
-anchor's top has `place` `object-<id>-top` and `place_anchor_id` the anchor's id, so
-a client reads the anchor from the id and never parses the key. An agent's tool for a
+anchor's top has `place` the top's key and `place_anchor_id` the anchor's id. The key
+is `object-<id>-top` for an anchor the memory made and the seed's key, as
+`coffee_table_top`, for a seeded one, so a client reads the anchor from the id and
+never parses the key. An agent's tool for a
 language model strips the poses, and reports sizes only for a measured box
 ([For agent clients](database.md#for-agent-clients)).
 
