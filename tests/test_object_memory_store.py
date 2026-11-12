@@ -441,6 +441,23 @@ def test_a_seeded_anchor_counts_its_views_against_its_stored_sightings(store):
     assert stored_views(store, 5) == anchor.n_views == 3
 
 
+def test_a_seeded_anchor_seen_again_keeps_its_official_name(store):
+    with transaction(store):
+        store.execute(
+            """INSERT INTO object (id, map_id, label, official_name, source, layer, state, p_exist,
+                                   center_x, center_y, center_z, size_x, size_y, size_z,
+                                   first_seen, last_seen)
+               VALUES (5, ?, 'table', 'coffee table', 'map', 'anchor', 'present', 0.95,
+                       2.0, 0.0, 0.37, 1.2, 0.8, 0.75, 0, 0)""",
+            (MAP,),
+        )
+    memory = ObjectMemory(CONFIG, load_tracks(store, MAP, CONFIG))
+    run(memory, store, [1.0, 2.0], lambda t: [seen(table_points(int(t)), label="table", stamp=t)])
+    row = store.execute("SELECT label, official_name, n_detections FROM object WHERE id = 5").fetchone()
+    assert (row["label"], row["official_name"]) == ("table", "coffee table")
+    assert row["n_detections"] > 0  # the save reached the anchor
+
+
 def test_the_first_save_after_a_restart_counts_the_stored_views_again(store):
     """A count an older build stored too high is replaced by the count of the stored arrays."""
     memory = ObjectMemory(CONFIG)

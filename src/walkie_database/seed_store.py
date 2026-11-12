@@ -279,6 +279,7 @@ class Anchor:
     enclosed: bool
     surfaces: list[Surface]
     fingerprint: Fingerprint | None
+    official_name: str | None = None  # the task-level name, as "coffee table" for a "table"
 
 
 def _parse_box(item: Mapping, key: str) -> ObjectBox | None:
@@ -346,7 +347,7 @@ def parse_anchors(document: Mapping, map_id: str, rooms: Sequence[Room]) -> tupl
     for i, item in enumerate(_items(document["anchors"], "anchors")):
         where = f"anchors[{i}]"
         check_fields(item, where, ("key", "label", "room_key", "geometry_valid", "enclosed", "surfaces"),
-                     ("center", "size", "yaw", "fingerprint"))
+                     ("center", "size", "yaw", "fingerprint", "official_name"))
         key = _key(item["key"], where)
         if item["room_key"] not in room_keys:
             raise Refused(f"Anchor {key} names the room {item['room_key']!r}, which is not listed.")
@@ -355,11 +356,15 @@ def parse_anchors(document: Mapping, map_id: str, rooms: Sequence[Room]) -> tupl
             for j, surface in enumerate(_items(item["surfaces"], f"surfaces of anchor {key}"))
         ]
         fingerprint = item.get("fingerprint")
+        # Absent means no name. Given, even as null, it must be text, as in the furniture file.
+        official_name = (_text(item["official_name"], f"The official name of anchor {key}")
+                         if "official_name" in item else None)
         anchors.append(
             Anchor(key, _text(item["label"], f"The label of anchor {key}"), item["room_key"],
                    _parse_box(item, key), _flag(item["enclosed"], f"enclosed of anchor {key}"),
                    sorted(surfaces, key=lambda surface: surface.key),
-                   None if fingerprint is None else _parse_fingerprint(fingerprint, key))
+                   None if fingerprint is None else _parse_fingerprint(fingerprint, key),
+                   official_name)
         )
     _unique([anchor.key for anchor in anchors], "The anchor key")
     _unique([s.key for anchor in anchors for s in anchor.surfaces], "The surface key")
@@ -414,6 +419,7 @@ class PreviousAnchor:
     id: int
     label: str
     room_key: str | None
+    official_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -465,9 +471,9 @@ def read_lineage(path: Path, map_id: str, digest: str) -> Lineage:
         counters = read_counters(conn)
         room_key = "r.key" if version >= 6 else "NULL"
         anchors = {
-            r["key"]: PreviousAnchor(r["id"], r["label"], r["room_key"])
+            r["key"]: PreviousAnchor(r["id"], r["label"], r["room_key"], r["official_name"])
             for r in conn.execute(
-                f"""SELECT o.id, o.key, o.label, {room_key} AS room_key
+                f"""SELECT o.id, o.key, o.label, {room_key} AS room_key, o.official_name
                     FROM object AS o LEFT JOIN room AS r ON r.id = o.room_id
                     WHERE o.map_id = ? AND o.layer = 'anchor' AND o.key IS NOT NULL""",
                 (map_id,),
@@ -588,8 +594,9 @@ def _build(
                 retained_ids=kept.values(),
             )
             conn.execute(
-                "UPDATE object SET enclosed = ?, in_baseline = ?, n_detections = 0 WHERE id = ?",
-                (int(anchor.enclosed), int(bool(baseline_rev)), anchor_id),
+                """UPDATE object SET enclosed = ?, in_baseline = ?, n_detections = 0, official_name = ?
+                   WHERE id = ?""",
+                (int(anchor.enclosed), int(bool(baseline_rev)), anchor.official_name, anchor_id),
             )
             for surface in anchor.surfaces:
                 add_surface(conn, anchor_id, surface.key, surface.z, surface.outline,
@@ -612,7 +619,8 @@ def _build(
                 previous.id,
                 retained_ids=kept.values(),
             )
-            conn.execute("UPDATE object SET n_detections = 0 WHERE id = ?", (previous.id,))
+            conn.execute("UPDATE object SET n_detections = 0, official_name = ? WHERE id = ?",
+                         (previous.official_name, previous.id))
             tombstone_object(conn, previous.id)
 
         for item in catalogue:

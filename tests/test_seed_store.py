@@ -42,6 +42,7 @@ from walkie_database.object_context import (
 )
 from walkie_database.objects import NewObject, insert_object, reserve_object_ids
 from walkie_database.people import Refused
+from walkie_database.queries import ObjectFilter, ObjectRepository
 from walkie_database.seed_store import RUN_TABLES, SEED_STORE_ID, main, write_seed
 from walkie_database.store_lock import StoreLock, lock_path
 
@@ -162,6 +163,22 @@ def test_the_stores_readers_work_on_a_seed(tmp_path, folder, map_id, output):
     box = conn.execute("SELECT * FROM object_box WHERE id = ?", (table,)).fetchone()
     assert box["max_z"] == pytest.approx(0.8)
     assert find_catalogue_items(conn, map_id, "mug")[0]["official_name"] == "blue cup"
+    conn.close()
+
+
+def test_an_anchors_official_name_is_stored_and_found_by_search(tmp_path, folder, map_id, output):
+    anchors = anchors_document(map_id, [anchor(official_name="coffee table"), bare_anchor()])
+    build(tmp_path, folder, output, anchors=anchors)
+
+    conn = read(output)
+    names = dict(conn.execute("SELECT key, official_name FROM object").fetchall())
+    assert names == {"table": "coffee table", "wardrobe": None}
+    found = ObjectRepository(conn, map_id=map_id, frame_id="map").search(
+        ObjectFilter(thing="coffee table"), vector=None, text="", max_results=5, now=0.0
+    )
+    assert [(m.record.key, m.record.label, m.record.official_name) for m in found.matches] == [
+        ("table", "table", "coffee table")
+    ]
     conn.close()
 
 
@@ -300,6 +317,9 @@ BAD_INPUTS = {
         _set_first("anchors", fingerprint=fingerprint(dimension=2, embedding=[1.0, 0.0]))
     ),
     "a zero vector": _anchors(_set_first("anchors", fingerprint=fingerprint(embedding=[0.0] * 512))),
+    "a blank official name on an anchor": _anchors(_set_first("anchors", official_name="  ")),
+    "an official name on an anchor as a number": _anchors(_set_first("anchors", official_name=2)),
+    "an official name on an anchor given as null": _anchors(_set_first("anchors", official_name=None)),
     "another schema in the catalogue": _catalogue(_set_top(schema_version=3)),
     "a zero weight": _catalogue(_set_first("objects", weight_g=0)),
     "a negative weight": _catalogue(_set_first("objects", weight_g=-1.0)),
@@ -497,6 +517,22 @@ def test_a_removed_anchor_becomes_a_tombstone_and_its_id_stays_taken(tmp_path, f
     ids = object_ids(second)
     assert ids["chair"] not in first.values()
     assert ids["table"] == first["table"]
+
+
+def test_a_reseed_names_its_anchors_from_the_new_file_and_a_tombstone_keeps_its_name(
+    tmp_path, folder, map_id, output
+):
+    named = [anchor(official_name="dining table"), anchor("desk", surfaces=[], official_name="writing desk")]
+    build(tmp_path, folder, output, anchors=anchors_document(map_id, anchors=named))
+    second = reseed(tmp_path, folder, map_id, output, [anchor(official_name="kitchen table")])
+    third = reseed(tmp_path, folder, map_id, second, [anchor()], name="third.db")
+
+    for path, table in ((second, "kitchen table"), (third, None)):
+        conn = read(path)
+        rows = {r["key"]: (r["official_name"], r["state"])
+                for r in conn.execute("SELECT key, official_name, state FROM object")}
+        assert rows == {"table": (table, "present"), "desk": ("writing desk", "discarded")}
+        conn.close()
 
 
 def test_a_returning_key_gets_its_old_id_back(tmp_path, folder, map_id, output):

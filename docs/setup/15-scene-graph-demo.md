@@ -25,7 +25,7 @@ seeded furniture.
 | `src/walkie_database/object_markers.py` | The `MarkerArray` and the `PointCloud2` |
 | `tools/replay_memory.py` | The offline replay and its score (`pixi run memory-replay`) |
 | `src/walkie_database/scene_furniture.py` | Seed anchors measured from a MuJoCo scene (`db-seed-sim --scene`) |
-| `tools/furniture/chula_pat14_6.yaml` | The Chula world's furniture bodies, with each one's anchor key and label |
+| `tools/furniture/chula_pat14_6.yaml` | The Chula world's furniture bodies, with each one's anchor key, label and official name |
 | `tools/truth/chula_pat14_6.json` | The Chula world's furniture and objects, as boxes in the map frame |
 
 `scipy` and `scikit-learn` are new dependencies, for the KD-tree and DBSCAN.
@@ -76,8 +76,10 @@ pixi run db-restore --seed /tmp/chula/seed.db --db /tmp/chula/walkie.db \
 
 The seed holds the two rooms and the world's nine pieces of furniture, as anchors
 measured from `scene.xml` for the bodies the furniture file names
-([The sim seed](../architecture/harvest.md#the-sim-seed)). In simulation, this
-stands in for the static scan of the arena. The memory confirms each anchor when it
+([The sim seed](../architecture/harvest.md#the-sim-seed)). Each anchor keeps the
+detector's label, as `table`, and gets an official name, as "coffee table"
+([Furniture from the scene](../architecture/harvest.md#furniture-from-the-scene)).
+In simulation, this stands in for the static scan of the arena. The memory confirms each anchor when it
 sees it. Furniture the detector names otherwise inside an anchor's box merges into
 that anchor ([ADR-0028](../architecture/decisions/0028-seeded-anchors-own-their-box.md)).
 Leave out `--scene` and `--furniture` for a rooms-only seed, in which the memory

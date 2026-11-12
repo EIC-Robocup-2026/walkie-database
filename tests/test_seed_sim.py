@@ -201,7 +201,10 @@ SCENE = """\
 </mujoco>
 """
 
-FURNITURE = {"schema_version": 1, "furniture": [{"body": "w_table", "key": "table", "label": "table"}]}
+FURNITURE = {
+    "schema_version": 1,
+    "furniture": [{"body": "w_table", "key": "table", "label": "table", "official_name": "dining table"}],
+}
 
 
 def scene_argv(tmp_path, folder, output, *, scene=SCENE, extra=()):
@@ -226,8 +229,8 @@ def test_the_scenes_furniture_becomes_the_seeds_anchors(tmp_path, folder, output
 
     conn = connect(output, readonly=True)
     table = conn.execute("SELECT * FROM object WHERE key = 'table'").fetchone()
-    assert table["label"] == "table"
-    living = conn.execute("SELECT id FROM room WHERE key = 'living_room'").fetchone()[0]
+    assert (table["label"], table["official_name"]) == ("table", "dining table")
+    living =conn.execute("SELECT id FROM room WHERE key = 'living_room'").fetchone()[0]
     assert table["room_id"] == living
     assert (table["center_x"], table["center_y"], table["center_z"]) == pytest.approx((2.0, 2.0, 0.4))
     surfaces = usable_surfaces(conn, table["id"])

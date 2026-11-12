@@ -135,16 +135,21 @@ time.
 ### Furniture from the scene
 
 In simulation, the world's MuJoCo scene stands in for the static scan of the arena.
-The furniture file names the scene's furniture bodies, with each one's anchor key and
-the label the detector uses. The Chula world's is
+The furniture file names the scene's furniture bodies, with each one's anchor key,
+the label the detector uses, and an optional official name. The Chula world's is
 `tools/furniture/chula_pat14_6.yaml`:
 
 ```yaml
 schema_version: 1
 furniture:
-- {body: chula_sofa, key: sofa, label: sofa}
-- {body: chula_coffee_table, key: coffee_table, label: table}
+- {body: chula_sofa, key: sofa, label: sofa, official_name: sofa}
+- {body: chula_coffee_table, key: coffee_table, label: table, official_name: coffee table}
 ```
+
+The memory matches detections by the label, so four pieces of the Chula world are a
+`table`. The official name is what a task calls the piece, as "coffee table". It
+goes to the anchor's `official_name`, which `ObjectSummary` carries and a search
+matches, and the memory never changes it.
 
 `walkie_database.scene_furniture` measures one anchor per body:
 

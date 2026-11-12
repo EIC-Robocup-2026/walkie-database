@@ -100,6 +100,14 @@ def test_a_restored_store_has_the_seeds_rows_and_a_fresh_store_id(seed, db, fold
     assert scalar(db, "PRAGMA quick_check") == "ok"
 
 
+def test_a_restore_keeps_an_anchors_official_name(tmp_path, folder, db):
+    seed = tmp_path / "named" / "seed.db"
+    anchors = anchors_document(map_id_of(folder), [anchor(official_name="coffee table"), bare_anchor()])
+    assert seed_store.main(seed_argv(tmp_path, folder, seed, anchors=anchors)) == 0
+    restore(seed, db, folder, "wall")
+    assert scalar(db, "SELECT official_name FROM object WHERE key = 'table'") == "coffee table"
+
+
 def test_every_restore_gets_its_own_store_id(seed, db, folder):
     first = restore(seed, db, folder, "wall").store_id
     second = restore(seed, db, folder, "wall").store_id

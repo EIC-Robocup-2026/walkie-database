@@ -78,6 +78,13 @@ def test_the_document_has_the_anchors_shape():
     assert (sofa["label"], sofa["geometry_valid"], sofa["enclosed"], sofa["yaw"]) == ("sofa", True, False, 0.0)
 
 
+def test_an_official_name_is_passed_on_only_when_given():
+    furniture = [FURNITURE[0] | {"official_name": "corner sofa"}, *FURNITURE[1:]]
+    anchors = by_key(measure(furniture=furniture))
+    assert (anchors["sofa"]["label"], anchors["sofa"]["official_name"]) == ("sofa", "corner sofa")
+    assert "official_name" not in anchors["shelf"]
+
+
 def test_the_box_bounds_the_collision_geoms_and_skips_the_visual_ones():
     sofa = by_key(measure())["sofa"]
     assert sofa["center"] == pytest.approx([2.0, 2.0, 0.425])
@@ -219,6 +226,8 @@ def test_a_body_inside_another_body_is_not_furniture():
         ([{"body": "w_sofa", "key": "sofa"}], 1, "missing label"),
         ([{"body": "w_sofa", "key": "sofa", "label": " "}], 1, "not blank"),
         ([{"body": "w_sofa", "key": "sofa", "label": "sofa", "yaw": 1.0}], 1, "unknown key yaw"),
+        ([{"body": "w_sofa", "key": "sofa", "label": "sofa", "official_name": " "}], 1, "not blank"),
+        ([{"body": "w_sofa", "key": "sofa", "label": "sofa", "official_name": None}], 1, "not blank"),
         ("w_sofa", 1, "must be a list"),
         (FURNITURE, 2, "schema_version 2"),
         (FURNITURE, True, "schema_version True"),

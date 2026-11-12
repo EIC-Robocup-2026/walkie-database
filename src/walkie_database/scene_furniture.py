@@ -1,12 +1,17 @@
 """Measure a sim world's furniture from its MuJoCo scene, as seed anchors.
 
 In simulation this stands in for the static scan of the arena. A furniture file
-names the scene bodies that are furniture, with each one's anchor key and label::
+names the scene bodies that are furniture, with each one's anchor key, label and
+optional official name::
 
     schema_version: 1
     furniture:
-    - {body: chula_sofa, key: sofa, label: sofa}
-    - {body: chula_coffee_table, key: coffee_table, label: table}
+    - {body: chula_sofa, key: sofa, label: sofa, official_name: sofa}
+    - {body: chula_coffee_table, key: coffee_table, label: table, official_name: coffee table}
+
+The label is the detector's word, which the memory matches detections by. The
+official name is what the task calls the piece. The memory never matches by it,
+and a search finds the piece by either.
 
 Each body gives one anchor, in the room whose outline holds its centre:
 
@@ -228,8 +233,9 @@ def furniture_anchors(
     anchors = []
     for i, item in enumerate(_items(furniture["furniture"], "The furniture file's furniture")):
         where = f"furniture[{i}]"
-        check_fields(item, where, ("body", "key", "label"))
+        check_fields(item, where, ("body", "key", "label"), ("official_name",))
         body, key, label = _text(item["body"], where), _key(item["key"], where), _text(item["label"], where)
+        named = {"official_name": _text(item["official_name"], where)} if "official_name" in item else {}
         if body not in bodies:
             raise Refused(f"The scene's worldbody has no body {body!r}, for the furniture {key}.")
         geoms = _body_geoms(bodies[body], defaults)
@@ -243,6 +249,7 @@ def furniture_anchors(
         anchors.append({
             "key": key,
             "label": label,
+            **named,
             "room_key": inside[0],
             "geometry_valid": True,
             "enclosed": False,

@@ -730,7 +730,7 @@ reads, and stores nothing ([Object queries](#object-queries)).
 | `geometry_stamp`                      | None        | When the box was last observed                                               |
 | `in_baseline`, `depth_seen`           | 0           | Seeded from a confirmed baseline, and seen with depth                        |
 | `revision`                            | 0           | Goes up with each change a client should notice                              |
-| `official_name`, `category`           | None        | Task-level names, set later                                                  |
+| `official_name`, `category`           | None        | Task-level names. A seed sets an anchor's `official_name` from its anchors file. |
 | `attributes`                          | `{}`        | A JSON object. The application checks its keys and values.                   |
 | `printed_text`, `caption_model`, `prompt_version` | None | Reserved for captions, which are off                                  |
 | `caption_view_id`                     | None        | The `object_observation` the caption came from. Not a foreign key, because that row already points back here. |
@@ -1236,6 +1236,7 @@ baseline_rev: ""
 anchors:
   - key: table
     label: table
+    official_name: dining table   # optional: the task-level name
     room_key: living_room
     geometry_valid: true
     enclosed: false
